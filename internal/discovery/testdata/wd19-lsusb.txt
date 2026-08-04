@@ -1,0 +1,5 @@
+Bus 001 Device 002: ID 413c:b06e Dell Inc. Dell Dock WD19
+Bus 001 Device 003: ID 413c:5410 Dell Inc. Dell dock
+Bus 001 Device 004: ID 0bda:8153 Realtek Semiconductor Corp. USB 10/100/1000 LAN
+Bus 001 Device 005: ID 1b3f:2008 Generalplus Technology Inc. USB Audio
+
