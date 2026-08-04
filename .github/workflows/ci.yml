@@ -66,6 +66,18 @@ jobs:
           DOCKWARDEN_TEST_FWUPD_PREFIX="$fwupd_prefix" go test -count=1 ./internal/update -run '^TestManagedFwupdToolPrefix$'
           env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" LANG=C LC_ALL=C \
             "$fwupd_prefix/bin/fwupdtool" --version --json
-          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" LANG=C LC_ALL=C \
+          set +e
+          device_output="$(env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" LANG=C LC_ALL=C \
             FWUPD_LOCALSTATEDIR="$RUNNER_TEMP/fwupd-state" CACHE_DIRECTORY="$RUNNER_TEMP/fwupd-cache" \
-            "$fwupd_prefix/bin/fwupdtool" --plugins dell_dock --json get-devices
+            "$fwupd_prefix/bin/fwupdtool" --plugins dell_dock --json get-devices)"
+          device_status=$?
+          set -e
+          printf '%s\n' "$device_output"
+          if [ "$device_status" -eq 0 ]; then
+            printf '%s\n' "$device_output" | jq -e '.Devices | type == "array"'
+          elif [ "$device_status" -eq 2 ]; then
+            printf '%s\n' "$device_output" | jq -e \
+              '.Error.Code == 9 and .Error.Message == "No detected devices"'
+          else
+            exit "$device_status"
+          fi
