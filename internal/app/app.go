@@ -18,9 +18,14 @@ type UpdateChecker interface {
 	Check(context.Context, *domain.Dock) domain.UpdateCheck
 }
 
+type FirmwareUpdater interface {
+	Apply(context.Context, *domain.Dock, *domain.FirmwareCandidate) domain.UpdateCheck
+}
+
 type Dependencies struct {
 	Inspector Inspector
 	Updates   UpdateChecker
+	Updater   FirmwareUpdater
 	Out       io.Writer
 	Err       io.Writer
 }
@@ -44,6 +49,9 @@ func Run(ctx context.Context, options cli.Options, dependencies Dependencies) in
 	if options.Command == "check-updates" {
 		report.Update = checkUpdates(ctx, report, dependencies.Updates)
 	}
+	if options.Command == "update" {
+		report.Update = runFirmwareUpdate(ctx, report, dependencies.Updates, dependencies.Updater, options.Apply)
+	}
 
 	if options.JSON {
 		err = output.RenderJSON(dependencies.Out, report)
@@ -55,6 +63,12 @@ func Run(ctx context.Context, options cli.Options, dependencies Dependencies) in
 		return 2
 	}
 	if report.State == "detected" {
+		if options.Command == "update" && options.Apply && report.Update != nil {
+			switch report.Update.State {
+			case "vendor_metadata_unavailable", "unsupported", "update_failed":
+				return 2
+			}
+		}
 		return 0
 	}
 	return 1
@@ -75,6 +89,32 @@ func checkUpdates(ctx context.Context, report domain.Report, updates UpdateCheck
 	}
 	result := updates.Check(ctx, report.Dock)
 	return &result
+}
+
+func runFirmwareUpdate(ctx context.Context, report domain.Report, updates UpdateChecker, updater FirmwareUpdater, apply bool) *domain.UpdateCheck {
+	result := checkUpdates(ctx, report, updates)
+	if !apply {
+		if result.State == "update_available" {
+			result.Reason = "plan only; re-run with --apply to download and install the candidate"
+		}
+		return result
+	}
+	if result.State != "update_available" || result.Candidate == nil {
+		return result
+	}
+	if updater == nil {
+		result.State = "unsupported"
+		result.Reason = "no firmware write backend is available for this platform"
+		return result
+	}
+	applied := updater.Apply(ctx, report.Dock, result.Candidate)
+	if applied.SourceURL == "" {
+		applied.SourceURL = result.SourceURL
+	}
+	if applied.Candidate == nil {
+		applied.Candidate = result.Candidate
+	}
+	return &applied
 }
 
 func doctorChecks(report domain.Report) []domain.Check {

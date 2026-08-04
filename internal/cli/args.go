@@ -8,6 +8,7 @@ import (
 type Options struct {
 	JSON    bool
 	Verbose bool
+	Apply   bool
 	Version bool
 	Help    bool
 	Command string
@@ -18,6 +19,7 @@ var commands = map[string]struct{}{
 	"status":        {},
 	"doctor":        {},
 	"check-updates": {},
+	"update":        {},
 }
 
 func Parse(args []string) (Options, error) {
@@ -29,6 +31,8 @@ func Parse(args []string) (Options, error) {
 			options.JSON = true
 		case "--verbose":
 			options.Verbose = true
+		case "--apply":
+			options.Apply = true
 		case "--version", "-V":
 			options.Version = true
 		case "--help", "-h":
@@ -53,9 +57,12 @@ func Parse(args []string) (Options, error) {
 	if options.Command == "" {
 		return Options{}, fmt.Errorf("a command is required")
 	}
+	if options.Apply && options.Command != "update" {
+		return Options{}, fmt.Errorf("--apply is only valid with update")
+	}
 	return options, nil
 }
 
 func Usage() string {
-	return "usage: dockwarden [--json] [--verbose] <scan|status|doctor|check-updates>"
+	return "usage: dockwarden [--json] [--verbose] [--apply] <scan|status|doctor|check-updates|update>"
 }

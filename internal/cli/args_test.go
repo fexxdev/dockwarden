@@ -27,3 +27,19 @@ func TestParseRecognizesVersion(t *testing.T) {
 		t.Fatalf("expected version option: %+v", got)
 	}
 }
+
+func TestParseAcceptsUpdateApply(t *testing.T) {
+	got, err := Parse([]string{"update", "--apply"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Command != "update" || !got.Apply {
+		t.Fatalf("unexpected options: %+v", got)
+	}
+}
+
+func TestParseRejectsApplyForReadOnlyCommand(t *testing.T) {
+	if _, err := Parse([]string{"scan", "--apply"}); err == nil {
+		t.Fatal("expected --apply to be rejected for scan")
+	}
+}
