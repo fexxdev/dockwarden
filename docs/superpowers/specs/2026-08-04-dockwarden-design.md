@@ -30,6 +30,9 @@ The first version must:
 - return human-readable output and machine-readable JSON;
 - explain missing permissions, tools, or device interfaces.
 
+USB descriptor versions such as `bcdDevice` must be reported as descriptor
+versions. They must never be labelled or compared as dock firmware versions.
+
 ## Non-goals
 
 The first version will not flash firmware. It will not run a throughput test,
@@ -62,6 +65,12 @@ dockwarden --version
 `scan` focuses on identity and topology. `status` focuses on current device
 state. `check-updates` only reads vendor metadata and reports candidates.
 `doctor` combines checks and prints actionable diagnostics.
+
+`check-updates` will use official Dell support metadata for the matched model.
+It will record the source URL, package name, release date, package version,
+compatibility, and published checksums. If the page does not provide enough
+structured data for a safe comparison, the command will report that the check
+is unavailable instead of guessing.
 
 ## Architecture
 
@@ -106,6 +115,10 @@ The CLI must distinguish these states:
 The CLI must never label a dock as fully healthy when it only saw a USB
 descriptor. It will report observable functionality and clearly mark tests
 that it cannot perform.
+
+Observable functionality means that the host enumerates the relevant USB
+interfaces and exposes the expected network, audio, or child-device service.
+It does not prove link speed, charging power, display output, or audio quality.
 
 ## Testing
 
