@@ -1,5 +1,8 @@
 # Dockwarden firmware update design
 
+> Status: superseded by the firmware safety hardening design in
+> `docs/superpowers/specs/2026-08-04-dockwarden-firmware-safety-design.md`.
+
 Date: 2026-08-04
 
 ## Goal
@@ -35,9 +38,10 @@ The temporary file is removed after fwupd exits. Dockwarden will not invoke
 
 ## Platform behavior
 
-Both platforms use Dell driver page `4P6VJ`, which publishes the WD19 Linux
+Both platforms use Dell driver page `389W0`, which publishes the WD19 Linux
 CAB. Linux uses fwupd. macOS uses IOHIDManager and the open Dell HID/I2C
-protocol.
+protocol. The native path binds the HID interface to the detected USB
+location and serial.
 
 The native macOS writer supports the WD19 Salomon EC, USB hubs, and package
 metadata. It refuses a newer MST payload until the native MST writer exists.
@@ -61,7 +65,8 @@ The existing update result reports:
 
 - `update_available`: a verified metadata candidate is available;
 - `unsupported`: the platform or detected component has no write backend;
-- `update_applied`: fwupdmgr accepted the archive;
+- `update_staged`: fwupdmgr or native HID accepted the archive and the dock
+  needs a reconnect;
 - `update_failed`: download, verification, authorization, or fwupd failed;
 - `vendor_metadata_unavailable`: Dell metadata could not be read;
 - `not_checked`: no supported dock was detected.
@@ -74,4 +79,4 @@ Tests cover CLI parsing, plan-only behavior, Dell download URL parsing, HTTPS
 host validation, SHA-256 verification, temporary payload cleanup, fwupdmgr
 invocation, HID packet construction, version comparison, and guarded native
 macOS writes. Live verification reads the physical dock but never runs
-`--apply` against it.
+`--apply` against it. The live dock is used only for read-only verification.

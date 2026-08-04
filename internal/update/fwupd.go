@@ -44,6 +44,12 @@ func (u FwupdUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *d
 	if !isSHA256(candidate.SHA256) {
 		return failed(candidate, "candidate does not contain a valid SHA-256")
 	}
+	if !strings.EqualFold(candidate.Format, "CAB") || !isCABDownloadURL(candidate.DownloadURL) || !strings.HasSuffix(strings.ToLower(candidate.PackageName), ".cab") {
+		return failed(candidate, "Linux firmware backend accepts only a Dell CAB package")
+	}
+	if !candidateSupports(candidate, "wd19", "linux") {
+		return failed(candidate, "candidate does not explicitly support Dell Dock WD19 on Linux")
+	}
 	if u.HTTP == nil {
 		return failed(candidate, "firmware HTTP client is not configured")
 	}
@@ -67,12 +73,12 @@ func (u FwupdUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *d
 		return failed(candidate, reason)
 	}
 
-	reason := "fwupdmgr accepted the verified Dell package"
+	reason := "fwupdmgr accepted the verified Dell package; unplug and reconnect the dock USB-C cable, then run status"
 	if text := strings.TrimSpace(string(output)); text != "" {
-		reason = summarize(text)
+		reason = summarize(text) + "; unplug and reconnect the dock USB-C cable, then run status"
 	}
 	return domain.UpdateCheck{
-		State:     "update_applied",
+		State:     "update_staged",
 		SourceURL: candidate.SourceURL,
 		Reason:    reason,
 		Candidate: candidate,
@@ -157,6 +163,27 @@ func isSHA256(value string) bool {
 	}
 	_, err := hex.DecodeString(value)
 	return err == nil
+}
+
+func candidateSupports(candidate *domain.FirmwareCandidate, model, operatingSystem string) bool {
+	if candidate == nil {
+		return false
+	}
+	modelMatch := false
+	for _, value := range candidate.CompatibleModels {
+		if strings.Contains(strings.ToLower(value), strings.ToLower(model)) {
+			modelMatch = true
+			break
+		}
+	}
+	osMatch := false
+	for _, value := range candidate.SupportedOS {
+		if strings.Contains(strings.ToLower(value), strings.ToLower(operatingSystem)) {
+			osMatch = true
+			break
+		}
+	}
+	return modelMatch && osMatch
 }
 
 func failed(candidate *domain.FirmwareCandidate, reason string) domain.UpdateCheck {

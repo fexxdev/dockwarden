@@ -3,6 +3,9 @@
 `dockwarden` is a command-line utility for Dell docking stations on macOS and
 Linux. The current target is the Dell Dock WD19.
 
+> A safety-first firmware control plane for the dock between your laptop,
+> displays, and last good USB-C cable.
+
 > **Use at your own risk.** Firmware updates can leave a dock unusable if power or USB
 > connectivity is lost. Read the plan before applying an update, and keep the dock on
 > stable power.
@@ -22,7 +25,9 @@ The utility can:
 
 The native macOS writer updates the embedded controller, USB Gen1 hub, USB
 Gen2 hub, and package metadata. It reads and compares MST firmware. It refuses
-a newer MST payload until a native MST writer is available.
+a newer MST payload until a native MST writer is available. Before any write,
+it checks the dock type, board revision, power reading, EC baseline, update
+status, target identity, package hash, and every component payload.
 
 The utility does not execute Dell Windows `.exe` packages. It does not accept
 arbitrary payloads, forced downgrades, or unverified firmware files.
@@ -39,7 +44,9 @@ go build -o dockwarden ./cmd/dockwarden
 
 On macOS, build with cgo enabled. The native writer uses IOKit, CoreFoundation,
 and the system `bsdtar` command. The dock must be connected before the command
-runs.
+runs. macOS may require HID or Input Monitoring permission for the terminal.
+If `status` reports denied HID access, grant that permission and run it again.
+The updater refuses to continue when direct HID access is unavailable.
 
 On Linux, install `fwupdmgr` and use the privilege model configured by the
 system. `dockwarden` does not invoke `sudo`.
@@ -69,9 +76,13 @@ Apply a firmware update:
 
 `update` is read-only. Only `update --apply` can download and write firmware.
 The updater accepts the official Dell CAB, verifies its SHA-256, and removes
-the temporary file after use.
+the temporary file after use. It binds macOS HID access to the detected dock
+location and serial. It refuses an ambiguous target.
 
-After a successful update, unplug and reconnect the dock USB-C cable.
+An apply result of `update_staged` means that the platform accepted the update
+and requires a physical reconnect. Unplug and reconnect the dock USB-C cable.
+Then run `status` and confirm the component versions. Do not interrupt power,
+USB-C, or the host during an active update.
 
 Use JSON output for automation:
 
@@ -90,9 +101,10 @@ Exit codes are:
 
 ## Firmware source
 
-The updater uses Dell driver `4P6VJ`, which publishes the Linux CAB for the
+The updater uses Dell driver `389W0`, which publishes the Linux CAB for the
 WD19 family. If Dell blocks the dynamic metadata page with HTTP 403,
-`dockwarden` uses a pinned official CAB and still verifies its SHA-256.
+`dockwarden` uses browser-compatible request headers and a pinned official CAB.
+It still verifies the CAB SHA-256 before any firmware operation.
 
 The Windows `.exe` is never executed. The project does not bundle Dell
 firmware blobs.
@@ -104,6 +116,7 @@ Run the test suite and static checks:
 ```sh
 GOCACHE=/tmp/dockwarden-go-cache go test ./...
 GOCACHE=/tmp/dockwarden-go-cache go vet ./...
+CGO_ENABLED=1 GOCACHE=/tmp/dockwarden-go-cache go build ./cmd/dockwarden
 GOOS=linux GOARCH=amd64 go build ./cmd/dockwarden
 ```
 

@@ -18,7 +18,7 @@ import (
 )
 
 const version = "0.3.0-dev"
-const wd19LinuxDriverURL = "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=4p6vj"
+const wd19LinuxDriverURL = "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=389w0"
 
 func main() {
 	options, err := cli.Parse(os.Args[1:])
@@ -44,12 +44,15 @@ func main() {
 	driverURL := wd19LinuxDriverURL
 	switch runtime.GOOS {
 	case "darwin":
-		dependencies.Inspector = discovery.MacInspector{}
+		openHID := func(target domain.HIDTarget) (update.HIDConnection, error) {
+			return hid.Open(target)
+		}
+		dependencies.Inspector = discovery.MacInspector{
+			Firmware: update.MacFirmwareReader{Open: openHID},
+		}
 		dependencies.Updater = update.MacUpdater{
 			HTTP: httpClient,
-			Open: func(productID uint16) (update.HIDConnection, error) {
-				return hid.Open(productID)
-			},
+			Open: openHID,
 		}
 		driverURL = wd19LinuxDriverURL
 	case "linux":

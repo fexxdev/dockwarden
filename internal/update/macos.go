@@ -18,6 +18,7 @@ const (
 	salomonDockType byte = 0x04
 
 	firmwareUpdateComplete byte = 0x01
+	firmwareUpdatePending  byte = 0x00
 	passiveReboot          byte = 0x02
 	passiveReset           byte = 0x01
 
@@ -42,7 +43,7 @@ type HIDConnection interface {
 	Close()
 }
 
-type HIDOpener func(productID uint16) (HIDConnection, error)
+type HIDOpener func(domain.HIDTarget) (HIDConnection, error)
 
 type FirmwareExtractor interface {
 	Extract(context.Context, string, string) ([]byte, error)
@@ -60,7 +61,7 @@ func (e BsdtarExtractor) Extract(ctx context.Context, archivePath, name string) 
 	if runner == nil {
 		runner = systemRunner{}
 	}
-	output, err := runner.Run(ctx, "bsdtar", "-xOf", archivePath, "DriverPackage/"+name)
+	output, err := runner.Run(ctx, "bsdtar", "-xOf", archivePath, name)
 	if err != nil {
 		return nil, fmt.Errorf("cannot extract %s from Dell CAB: %w", name, err)
 	}
@@ -96,7 +97,7 @@ type macHubUpdate struct {
 	Candidate    string
 }
 
-func (u MacUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *domain.FirmwareCandidate) domain.UpdateCheck {
+func (u MacUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *domain.FirmwareCandidate) (result domain.UpdateCheck) {
 	if !isSupportedWD19(dock) {
 		return failed(candidate, "firmware backend accepts only the detected Dell Dock WD19 (413c:b06e)")
 	}
@@ -109,6 +110,9 @@ func (u MacUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *dom
 	if !isCABDownloadURL(candidate.DownloadURL) {
 		return failed(candidate, "macOS native updater accepts only a Dell CAB package")
 	}
+	if !strings.EqualFold(candidate.Format, "CAB") || !strings.HasSuffix(strings.ToLower(candidate.PackageName), ".cab") {
+		return failed(candidate, "macOS native updater requires CAB metadata")
+	}
 	if !isSHA256(candidate.SHA256) {
 		return failed(candidate, "candidate does not contain a valid SHA-256")
 	}
@@ -118,6 +122,10 @@ func (u MacUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *dom
 	if u.Open == nil {
 		return failed(candidate, "macOS HID opener is not configured")
 	}
+	baseTarget, err := hidTargetForProduct(dock, wd19Gen2ProductID)
+	if err != nil {
+		return failed(candidate, err.Error())
+	}
 
 	payloadPath, err := (FwupdUpdater{HTTP: u.HTTP, TempDir: u.TempDir}).download(ctx, candidate)
 	if err != nil {
@@ -125,7 +133,7 @@ func (u MacUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *dom
 	}
 	defer os.Remove(payloadPath)
 
-	baseConnection, err := u.Open(wd19Gen2ProductID)
+	baseConnection, err := u.Open(baseTarget)
 	if err != nil {
 		return failed(candidate, "cannot open WD19 control HID: "+err.Error())
 	}
@@ -134,6 +142,18 @@ func (u MacUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *dom
 	}
 	defer baseConnection.Close()
 	base := DellHID{Reports: baseConnection}
+	unlockedTargets := make([]byte, 0, 4)
+	activated := false
+	defer func() {
+		if activated || len(unlockedTargets) == 0 {
+			return
+		}
+		for index := len(unlockedTargets) - 1; index >= 0; index-- {
+			if err := base.ModifyLock(unlockedTargets[index], false); err != nil && result.Reason != "" {
+				result.Reason += fmt.Sprintf("; cleanup could not relock target %d", unlockedTargets[index])
+			}
+		}
+	}()
 
 	dockData, err := base.ReadDockData()
 	if err != nil {
@@ -145,6 +165,13 @@ func (u MacUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *dom
 	components, err := base.ReadDockInfo()
 	if err != nil {
 		return failed(candidate, "cannot read WD19 component versions over HID: "+err.Error())
+	}
+	ecComponent, ok := findDockComponent(components, dockDeviceTypeEC, 0)
+	if !ok {
+		return failed(candidate, "WD19 component list has no embedded controller version")
+	}
+	if err := validateMacPreflight(dockData, ecComponent.Version); err != nil {
+		return failed(candidate, err.Error())
 	}
 	status, err := base.ReadUpdateStatus()
 	if err != nil {
@@ -171,6 +198,7 @@ func (u MacUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *dom
 		if err := base.ModifyLock(1, true); err != nil {
 			return failed(candidate, "cannot unlock WD19 EC: "+err.Error())
 		}
+		unlockedTargets = append(unlockedTargets, 1)
 		if err := flashHID(ctx, base, 0xff000000, 0xff, plan.ecBlob, false); err != nil {
 			return failed(candidate, "cannot write WD19 EC firmware: "+err.Error())
 		}
@@ -180,7 +208,11 @@ func (u MacUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *dom
 	for _, hub := range plan.hubs {
 		hubConnection := baseConnection
 		if hub.ProductID != wd19Gen2ProductID {
-			hubConnection, err = u.Open(hub.ProductID)
+			hubTarget, targetErr := hidTargetForProduct(dock, hub.ProductID)
+			if targetErr != nil {
+				return failed(candidate, targetErr.Error())
+			}
+			hubConnection, err = u.Open(hubTarget)
 			if err != nil {
 				return failed(candidate, "cannot open WD19 hub HID "+fmt.Sprintf("413c:%04x", hub.ProductID)+": "+err.Error())
 			}
@@ -193,6 +225,7 @@ func (u MacUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *dom
 		if err := base.ModifyLock(hub.UnlockTarget, true); err != nil {
 			return failed(candidate, "cannot unlock "+hub.Name+": "+err.Error())
 		}
+		unlockedTargets = append(unlockedTargets, hub.UnlockTarget)
 		if err := flashHID(ctx, hubDevice, 0, 1, hub.Blob, true); err != nil {
 			return failed(candidate, "cannot write "+hub.Name+": "+err.Error())
 		}
@@ -221,12 +254,116 @@ func (u MacUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *dom
 	if err := base.RebootPassive(flow); err != nil {
 		return failed(candidate, "components were written but WD19 reboot activation failed: "+err.Error())
 	}
+	activated = true
+	postStatus, postStatusErr := base.ReadUpdateStatus()
+	if postStatusErr != nil {
+		return domain.UpdateCheck{
+			State:     "update_staged",
+			SourceURL: candidate.SourceURL,
+			Reason:    "updated " + strings.Join(updated, ", ") + "; passive activation sent, but pending status could not be read; unplug and reconnect the dock USB-C cable, then run status",
+			Candidate: candidate,
+		}
+	}
+	if postStatus != firmwareUpdatePending {
+		return failed(candidate, fmt.Sprintf("WD19 did not report a pending update after passive activation: status %#02x", postStatus))
+	}
 	return domain.UpdateCheck{
-		State:     "update_applied",
+		State:     "update_staged",
 		SourceURL: candidate.SourceURL,
-		Reason:    "updated " + strings.Join(updated, ", ") + "; unplug and reconnect the dock USB-C cable",
+		Reason:    "updated " + strings.Join(updated, ", ") + "; passive activation staged the firmware; unplug and reconnect the dock USB-C cable, then run status",
 		Candidate: candidate,
 	}
+}
+
+func validateMacPreflight(dockData DockData, ecVersion string) error {
+	if dockData.DockType != salomonDockType {
+		return fmt.Errorf("detected WD19 dock type %#02x is not supported by the native updater", dockData.DockType)
+	}
+	if dockData.BoardID < 6 {
+		return fmt.Errorf("WD19 board revision %d is below the safe minimum 6", dockData.BoardID)
+	}
+	if dockData.PowerSupplyWattage == 0 {
+		return fmt.Errorf("WD19 power supply wattage is unavailable; refusing firmware write")
+	}
+	minimumVersionIsNewer, err := versionIsNewer("01.01.00.01", ecVersion)
+	if err != nil {
+		return fmt.Errorf("cannot validate WD19 EC baseline: %w", err)
+	}
+	if minimumVersionIsNewer {
+		return fmt.Errorf("WD19 EC version %s is below the safe baseline 01.01.00.01", ecVersion)
+	}
+	return nil
+}
+
+func hidTargetForProduct(dock *domain.Dock, productID uint16) (domain.HIDTarget, error) {
+	if dock == nil {
+		return domain.HIDTarget{}, fmt.Errorf("cannot select HID target without a detected dock")
+	}
+	devices := make([]domain.USBDevice, 0, len(dock.Devices)+1)
+	if dock.VendorID == 0x413c && dock.ProductID == productID {
+		devices = append(devices, domain.USBDevice{
+			VendorID:  dock.VendorID,
+			ProductID: productID,
+			Serial:    dock.Serial,
+			Location:  dockLocation(dock),
+		})
+	}
+	for _, device := range dock.Devices {
+		if device.VendorID == 0x413c && device.ProductID == productID {
+			devices = append(devices, device)
+		}
+	}
+
+	unique := make([]domain.USBDevice, 0, len(devices))
+	seen := make(map[string]bool)
+	for _, device := range devices {
+		key := device.Location + "\x00" + device.Serial
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, device)
+	}
+	if len(unique) == 0 {
+		return domain.HIDTarget{}, fmt.Errorf("cannot find Dell HID target 413c:%04x in the detected dock topology", productID)
+	}
+	if len(unique) != 1 {
+		return domain.HIDTarget{}, fmt.Errorf("ambiguous Dell HID target 413c:%04x: %d matching devices", productID, len(unique))
+	}
+	locationID, err := parseHIDLocation(unique[0].Location)
+	if err != nil {
+		return domain.HIDTarget{}, fmt.Errorf("cannot parse HID location %q: %w", unique[0].Location, err)
+	}
+	if locationID == 0 && strings.TrimSpace(unique[0].Serial) == "" {
+		return domain.HIDTarget{}, fmt.Errorf("Dell HID target 413c:%04x has no stable location or serial", productID)
+	}
+	return domain.HIDTarget{
+		VendorID:   0x413c,
+		ProductID:  productID,
+		Serial:     unique[0].Serial,
+		LocationID: locationID,
+	}, nil
+}
+
+func dockLocation(dock *domain.Dock) string {
+	for _, device := range dock.Devices {
+		if device.VendorID == dock.VendorID && device.ProductID == dock.ProductID && device.Location != "" {
+			return device.Location
+		}
+	}
+	return ""
+}
+
+func parseHIDLocation(value string) (uint32, error) {
+	value = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(value), "0x"))
+	if value == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.ParseUint(value, 16, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid hexadecimal location")
+	}
+	return uint32(parsed), nil
 }
 
 func buildMacUpdatePlan(ctx context.Context, extractor FirmwareExtractor, payloadPath string, dockData DockData, components []DockComponent) (macUpdatePlan, error) {

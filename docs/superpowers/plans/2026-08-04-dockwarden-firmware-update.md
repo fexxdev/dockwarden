@@ -4,6 +4,9 @@
 
 **Goal:** Add a guarded cross-platform firmware update command for the Dell Dock WD19.
 
+> Status: implemented and superseded by
+> `docs/superpowers/plans/2026-08-04-dockwarden-firmware-safety-hardening.md`.
+
 **Architecture:** The CLI builds a read-only update plan through the existing
 Dell catalog client. With `--apply`, Linux downloads and hash-checks the
 official CAB, then invokes `fwupdmgr local-install`. macOS uses the verified
@@ -108,7 +111,7 @@ CAB and the native Dell HID/I2C protocol.
 - Modify: `docs/superpowers/specs/2026-08-04-dockwarden-design.md`
 
 **Interfaces:**
-- Both platforms use Dell driver `4p6vj` for the CAB candidate.
+- Both platforms use Dell driver `389w0` for the CAB candidate.
 - Linux instantiates `FwupdUpdater`; macOS instantiates the native HID updater.
 
 - [ ] Add the shared CAB source and instantiate the platform-specific updater.

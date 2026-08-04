@@ -7,10 +7,41 @@ package hid
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hid/IOHIDManager.h>
 #include <IOKit/IOReturn.h>
+#include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
 
-static int dockwarden_hid_open(uint32_t vendor_id, uint32_t product_id, void **out_device, void **out_manager) {
+static int dockwarden_hid_matches(IOHIDDeviceRef device, uint32_t location_id, const char *serial) {
+	int matched_identity = 0;
+	if (location_id != 0) {
+		CFTypeRef raw_location = IOHIDDeviceGetProperty(device, CFSTR(kIOHIDLocationIDKey));
+		int32_t actual_location = 0;
+		if (raw_location != NULL && CFGetTypeID(raw_location) == CFNumberGetTypeID() &&
+		    CFNumberGetValue((CFNumberRef)raw_location, kCFNumberSInt32Type, &actual_location)) {
+			if ((uint32_t)actual_location != location_id) {
+				return 0;
+			}
+			matched_identity = 1;
+		}
+	}
+	if (serial != NULL && serial[0] != '\0') {
+		CFTypeRef raw_serial = IOHIDDeviceGetProperty(device, CFSTR(kIOHIDSerialNumberKey));
+		char actual_serial[256] = {0};
+		if (raw_serial != NULL && CFGetTypeID(raw_serial) == CFStringGetTypeID() &&
+		    CFStringGetCString((CFStringRef)raw_serial, actual_serial, sizeof(actual_serial), kCFStringEncodingUTF8)) {
+			if (strcmp(actual_serial, serial) != 0) {
+				return 0;
+			}
+			matched_identity = 1;
+		}
+	}
+	return matched_identity;
+}
+
+static int dockwarden_hid_open(uint32_t vendor_id, uint32_t product_id, uint32_t location_id, const char *serial, void **out_device, void **out_manager, uint32_t *out_matches) {
+	*out_device = NULL;
+	*out_manager = NULL;
+	*out_matches = 0;
 	IOHIDManagerRef manager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
 	if (manager == NULL) {
 		return kIOReturnNoMemory;
@@ -64,17 +95,36 @@ static int dockwarden_hid_open(uint32_t vendor_id, uint32_t product_id, void **o
 		return kIOReturnNoMemory;
 	}
 	CFSetGetValues(devices, (const void **)values);
-	status = kIOReturnNotFound;
+	IOHIDDeviceRef selected = NULL;
+	uint32_t matches = 0;
 	for (CFIndex index = 0; index < count; index++) {
-		IOReturn open_status = IOHIDDeviceOpen(values[index], kIOHIDOptionsTypeNone);
-		if (open_status == kIOReturnSuccess) {
-			CFRetain(values[index]);
-			*out_device = values[index];
-			*out_manager = manager;
-			status = kIOReturnSuccess;
-			break;
+		if (dockwarden_hid_matches(values[index], location_id, serial)) {
+			selected = values[index];
+			matches++;
 		}
-		status = open_status;
+	}
+	*out_matches = matches;
+	if (matches == 0) {
+		free(values);
+		CFRelease(devices);
+		IOHIDManagerClose(manager, kIOHIDOptionsTypeNone);
+		CFRelease(matching);
+		CFRelease(manager);
+		return kIOReturnNotFound;
+	}
+	if (matches != 1) {
+		free(values);
+		CFRelease(devices);
+		IOHIDManagerClose(manager, kIOHIDOptionsTypeNone);
+		CFRelease(matching);
+		CFRelease(manager);
+		return kIOReturnExclusiveAccess;
+	}
+	status = IOHIDDeviceOpen(selected, kIOHIDOptionsTypeNone);
+	if (status == kIOReturnSuccess) {
+		CFRetain(selected);
+		*out_device = selected;
+		*out_manager = manager;
 	}
 	free(values);
 	CFRelease(devices);
@@ -88,21 +138,111 @@ static int dockwarden_hid_open(uint32_t vendor_id, uint32_t product_id, void **o
 	return status;
 }
 
+typedef struct {
+	IOReturn status;
+	int done;
+	CFIndex capacity;
+	CFIndex length;
+} dockwarden_hid_report_context;
+
+static void dockwarden_hid_report_callback(
+	void *context,
+	IOReturn status,
+	void *sender,
+	IOHIDReportType type,
+	uint32_t report_id,
+	uint8_t *report,
+	CFIndex length) {
+	(void)sender;
+	(void)type;
+	(void)report_id;
+	(void)report;
+	dockwarden_hid_report_context *state = (dockwarden_hid_report_context *)context;
+	state->status = status;
+	if (status == kIOReturnSuccess) {
+		if (length < 0 || length > state->capacity) {
+			state->status = kIOReturnOverrun;
+		} else {
+			state->length = length;
+		}
+	}
+	state->done = 1;
+}
+
+static IOReturn dockwarden_hid_wait_for_report(
+	IOHIDDeviceRef device,
+	IOHIDReportType report_type,
+	const uint8_t *set_report,
+	uint8_t *get_report,
+	CFIndex capacity,
+	CFIndex *length) {
+	// fwupd uses a 2000 ms HID transaction timeout.
+	const CFTimeInterval report_timeout_ms = 2000.0;
+	const CFTimeInterval run_loop_timeout_seconds = 2.5;
+	CFRunLoopRef run_loop = CFRunLoopGetCurrent();
+	dockwarden_hid_report_context context = {
+		.status = kIOReturnTimeout,
+		.done = 0,
+		.capacity = capacity,
+		.length = 0,
+	};
+	IOHIDDeviceScheduleWithRunLoop(device, run_loop, kCFRunLoopDefaultMode);
+	IOReturn status;
+	if (report_type == kIOHIDReportTypeOutput) {
+		status = IOHIDDeviceSetReportWithCallback(
+			device,
+			report_type,
+			0,
+			set_report,
+			capacity,
+			report_timeout_ms,
+			dockwarden_hid_report_callback,
+			&context);
+	} else {
+		status = IOHIDDeviceGetReportWithCallback(
+			device,
+			report_type,
+			0,
+			get_report,
+			&capacity,
+			report_timeout_ms,
+			dockwarden_hid_report_callback,
+			&context);
+	}
+	if (status == kIOReturnSuccess) {
+		while (!context.done) {
+			CFRunLoopRunResult result = CFRunLoopRunInMode(kCFRunLoopDefaultMode, run_loop_timeout_seconds, true);
+			if (result == kCFRunLoopRunTimedOut || result == kCFRunLoopRunStopped || result == kCFRunLoopRunFinished) {
+				context.status = kIOReturnTimeout;
+				break;
+			}
+		}
+		status = context.status;
+	}
+	IOHIDDeviceUnscheduleFromRunLoop(device, run_loop, kCFRunLoopDefaultMode);
+	if (length != NULL && status == kIOReturnSuccess) {
+		*length = context.length;
+	}
+	return status;
+}
+
 static int dockwarden_hid_set_report(void *raw_device, const uint8_t *report, size_t length) {
-	return IOHIDDeviceSetReport(
+	return dockwarden_hid_wait_for_report(
 		(IOHIDDeviceRef)raw_device,
 		kIOHIDReportTypeOutput,
-		0,
 		report,
-		length);
+		NULL,
+		(CFIndex)length,
+		NULL);
 }
 
 static int dockwarden_hid_get_report(void *raw_device, uint8_t *report, CFIndex *length) {
-	return IOHIDDeviceGetReport(
+	return dockwarden_hid_wait_for_report(
 		(IOHIDDeviceRef)raw_device,
 		kIOHIDReportTypeInput,
-		0,
+		NULL,
 		report,
+		*length,
 		length);
 }
 
@@ -121,11 +261,12 @@ import "C"
 import (
 	"fmt"
 	"unsafe"
+
+	"github.com/fexxdev/dockwarden/internal/domain"
 )
 
 const (
-	vendorDell uint32 = 0x413c
-	reportSize        = 192
+	reportSize = 192
 )
 
 type Device struct {
@@ -133,12 +274,27 @@ type Device struct {
 	manager unsafe.Pointer
 }
 
-func Open(productID uint16) (*Device, error) {
+func Open(target domain.HIDTarget) (*Device, error) {
 	var raw unsafe.Pointer
 	var manager unsafe.Pointer
-	status := C.dockwarden_hid_open(C.uint32_t(vendorDell), C.uint32_t(productID), &raw, &manager)
+	serial := C.CString(target.Serial)
+	defer C.free(unsafe.Pointer(serial))
+	var matches C.uint32_t
+	status := C.dockwarden_hid_open(C.uint32_t(target.VendorID), C.uint32_t(target.ProductID), C.uint32_t(target.LocationID), serial, &raw, &manager, &matches)
 	if status != C.kIOReturnSuccess {
-		return nil, fmt.Errorf("cannot open Dell HID interface 413c:%04x: IOKit 0x%x", productID, uint32(status))
+		if matches > 1 {
+			return nil, fmt.Errorf("ambiguous Dell HID target %04x:%04x: %d matches", target.VendorID, target.ProductID, uint32(matches))
+		}
+		if status == C.kIOReturnTimeout {
+			return nil, fmt.Errorf("Dell HID transaction timed out after 2 seconds; check the USB-C link and power, then retry (IOKit 0x%x)", uint32(status))
+		}
+		if status == C.kIOReturnNotPermitted {
+			return nil, fmt.Errorf("macOS denied direct HID access; grant the terminal or app HID/Input Monitoring permission and retry (IOKit 0x%x)", uint32(status))
+		}
+		if status == C.kIOReturnExclusiveAccess {
+			return nil, fmt.Errorf("Dell HID target is already in use by another process; close other dock tools and retry (IOKit 0x%x)", uint32(status))
+		}
+		return nil, fmt.Errorf("cannot open Dell HID interface %04x:%04x at %#08x: IOKit 0x%x", target.VendorID, target.ProductID, target.LocationID, uint32(status))
 	}
 	return &Device{raw: raw, manager: manager}, nil
 }
@@ -152,6 +308,9 @@ func (d *Device) SetOutputReport(report []byte) error {
 	}
 	status := C.dockwarden_hid_set_report(d.raw, (*C.uint8_t)(unsafe.Pointer(&report[0])), C.size_t(len(report)))
 	if status != C.kIOReturnSuccess {
+		if status == C.kIOReturnTimeout {
+			return fmt.Errorf("Dell HID output report timed out after 2 seconds")
+		}
 		return fmt.Errorf("cannot set Dell HID output report: IOKit 0x%x", uint32(status))
 	}
 	return nil
@@ -167,6 +326,9 @@ func (d *Device) GetInputReport(report []byte) error {
 	length := C.CFIndex(len(report))
 	status := C.dockwarden_hid_get_report(d.raw, (*C.uint8_t)(unsafe.Pointer(&report[0])), &length)
 	if status != C.kIOReturnSuccess {
+		if status == C.kIOReturnTimeout {
+			return fmt.Errorf("Dell HID input report timed out after 2 seconds")
+		}
 		return fmt.Errorf("cannot get Dell HID input report: IOKit 0x%x", uint32(status))
 	}
 	if int(length) < len(report) {

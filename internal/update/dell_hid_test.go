@@ -11,6 +11,34 @@ type fakeHIDReportDevice struct {
 	inputs  [][]byte
 }
 
+type retryHIDReportDevice struct {
+	setAttempts int
+	failSets    int
+}
+
+func (f *retryHIDReportDevice) SetOutputReport([]byte) error {
+	f.setAttempts++
+	if f.setAttempts <= f.failSets {
+		return errors.New("transient HID output failure")
+	}
+	return nil
+}
+
+func (f *retryHIDReportDevice) GetInputReport([]byte) error {
+	return nil
+}
+
+func TestDellHIDRetriesTransientOutputReports(t *testing.T) {
+	fake := &retryHIDReportDevice{failSets: 4}
+	device := DellHID{Reports: fake}
+	if err := device.WriteFlash(0, []byte{1}); err != nil {
+		t.Fatalf("WriteFlash() error = %v", err)
+	}
+	if fake.setAttempts != 5 {
+		t.Fatalf("SetOutputReport() attempts = %d, want 5", fake.setAttempts)
+	}
+}
+
 func (f *fakeHIDReportDevice) SetOutputReport(report []byte) error {
 	f.outputs = append(f.outputs, append([]byte(nil), report...))
 	return nil

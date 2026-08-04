@@ -182,14 +182,14 @@ func TestRunUpdatePlansWithoutApply(t *testing.T) {
 	}
 }
 
-func TestRunUpdateAppliesOnlyWithApply(t *testing.T) {
+func TestRunUpdateStagesOnlyWithApply(t *testing.T) {
 	inspector := &fakeInspector{report: detectedReport()}
 	updates := &fakeUpdateChecker{result: domain.UpdateCheck{
 		State:     "update_available",
 		SourceURL: "https://www.dell.com/support/drivers",
 		Candidate: &domain.FirmwareCandidate{PackageName: "wd19.cab"},
 	}}
-	updater := &fakeFirmwareUpdater{result: domain.UpdateCheck{State: "update_applied", Reason: "fwupdmgr accepted the package"}}
+	updater := &fakeFirmwareUpdater{result: domain.UpdateCheck{State: "update_staged", Reason: "fwupdmgr accepted the package; reconnect the dock"}}
 	var out bytes.Buffer
 	code := Run(context.Background(), cli.Options{
 		Command: "update",

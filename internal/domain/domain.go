@@ -25,6 +25,13 @@ type Dock struct {
 	Firmware          []FirmwareObservation `json:"firmware"`
 }
 
+type HIDTarget struct {
+	VendorID   uint16
+	ProductID  uint16
+	Serial     string
+	LocationID uint32
+}
+
 type USBDevice struct {
 	Name              string `json:"name"`
 	Vendor            string `json:"vendor,omitempty"`

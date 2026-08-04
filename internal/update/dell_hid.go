@@ -10,6 +10,7 @@ const (
 	hidMaxRead             = 192
 	hidMaxWrite            = 128
 	hidDataOffset          = 64
+	hidMaxAttempts         = 5
 	dockDataSize           = 103
 	dockInfoSize           = 0xb7
 	hidCommandRead         = 0xc0
@@ -97,11 +98,11 @@ func (d DellHID) ReadI2C(command uint32, size int, settings I2CSettings) ([]byte
 	packet[8] = settings.Target
 	packet[9] = settings.RegisterLength
 	packet[10] = settings.Speed | 0x80
-	if err := d.Reports.SetOutputReport(packet); err != nil {
+	if err := d.setOutputReport(packet); err != nil {
 		return nil, fmt.Errorf("set HID output report: %w", err)
 	}
 	result := make([]byte, hidReportSize)
-	if err := d.Reports.GetInputReport(result); err != nil {
+	if err := d.getInputReport(result); err != nil {
 		return nil, fmt.Errorf("get HID input report: %w", err)
 	}
 	return append([]byte(nil), result[:size]...), nil
@@ -116,17 +117,17 @@ func (d DellHID) WriteI2C(data []byte, settings I2CSettings) error {
 	packet[8] = settings.Target
 	packet[10] = settings.Speed | 0x80
 	copy(packet[hidDataOffset:], data)
-	return d.Reports.SetOutputReport(packet)
+	return d.setOutputReport(packet)
 }
 
 func (d DellHID) ReadHubVersion() (string, error) {
 	packet := newHIDPacket(hidCommandRead, hidExtensionStatus)
 	binary.LittleEndian.PutUint16(packet[6:8], 12)
-	if err := d.Reports.SetOutputReport(packet); err != nil {
+	if err := d.setOutputReport(packet); err != nil {
 		return "", fmt.Errorf("set hub version report: %w", err)
 	}
 	result := make([]byte, hidReportSize)
-	if err := d.Reports.GetInputReport(result); err != nil {
+	if err := d.getInputReport(result); err != nil {
 		return "", fmt.Errorf("get hub version report: %w", err)
 	}
 	return fmt.Sprintf("%02x.%02x", result[10], result[11]), nil
@@ -222,13 +223,13 @@ func (d DellHID) RaiseMcuClock(enabled bool) error {
 	if enabled {
 		packet[2] = 1
 	}
-	return d.Reports.SetOutputReport(packet)
+	return d.setOutputReport(packet)
 }
 
 func (d DellHID) EraseBank(index byte) error {
 	packet := newHIDPacket(hidCommandWrite, hidExtensionErase)
 	packet[3] = index
-	return d.Reports.SetOutputReport(packet)
+	return d.setOutputReport(packet)
 }
 
 func (d DellHID) WriteFlash(address uint32, data []byte) error {
@@ -239,18 +240,18 @@ func (d DellHID) WriteFlash(address uint32, data []byte) error {
 	binary.LittleEndian.PutUint32(packet[2:6], address)
 	binary.LittleEndian.PutUint16(packet[6:8], uint16(len(data)))
 	copy(packet[hidDataOffset:], data)
-	return d.Reports.SetOutputReport(packet)
+	return d.setOutputReport(packet)
 }
 
 func (d DellHID) VerifyUpdate() (bool, error) {
 	packet := newHIDPacket(hidCommandWrite, hidExtensionVerify)
 	packet[2] = 1
 	binary.LittleEndian.PutUint16(packet[6:8], 1)
-	if err := d.Reports.SetOutputReport(packet); err != nil {
+	if err := d.setOutputReport(packet); err != nil {
 		return false, err
 	}
 	result := make([]byte, hidReportSize)
-	if err := d.Reports.GetInputReport(result); err != nil {
+	if err := d.getInputReport(result); err != nil {
 		return false, err
 	}
 	return result[0] != 0, nil
@@ -276,6 +277,34 @@ func (d DellHID) readEC(command byte, size int) ([]byte, error) {
 		return nil, fmt.Errorf("EC command %#x returned length %d, want %d", command, data[0], size)
 	}
 	return append([]byte(nil), data[1:]...), nil
+}
+
+func (d DellHID) setOutputReport(report []byte) error {
+	if d.Reports == nil {
+		return fmt.Errorf("HID report device is not configured")
+	}
+	var err error
+	for attempt := 1; attempt <= hidMaxAttempts; attempt++ {
+		err = d.Reports.SetOutputReport(report)
+		if err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("HID output report failed after %d attempts: %w", hidMaxAttempts, err)
+}
+
+func (d DellHID) getInputReport(report []byte) error {
+	if d.Reports == nil {
+		return fmt.Errorf("HID report device is not configured")
+	}
+	var err error
+	for attempt := 1; attempt <= hidMaxAttempts; attempt++ {
+		err = d.Reports.GetInputReport(report)
+		if err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("HID input report failed after %d attempts: %w", hidMaxAttempts, err)
 }
 
 func ecSettings() I2CSettings {

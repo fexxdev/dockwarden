@@ -4,13 +4,16 @@
 The utility uses the Dell WD19 USB identifiers `0x413c:0xb06e` and parses
 macOS IORegistry or Linux `lsusb` output.
 
-The update check reads the official WD19 driver metadata page. It accepts a
-candidate only when the page provides a compatible model, version, release
-date, package name, HTTPS Dell download URL, and SHA-256.
+The update check reads the official WD19 driver metadata page `389W0`. It
+accepts a candidate only when the page provides a compatible model, Linux
+support, CAB format, version, release date, package name, HTTPS Dell download
+URL, and SHA-256.
 
 Linux `update --apply` downloads the official Dell CAB, verifies its SHA-256,
 and invokes `fwupdmgr local-install`. macOS verifies the same CAB and writes
-supported WD19 components through the native HID/I2C protocol.
+supported WD19 components through the native HID/I2C protocol. Both backends
+report `update_staged`; the dock needs a USB-C reconnect before final status
+verification.
 
 Date: 2026-08-04
 
@@ -33,12 +36,12 @@ Build a cross-platform command-line utility named `dockwarden` for macOS and
 Linux. Discovery and plan-only commands inspect the dock without changing it.
 The explicit apply command is the only write path.
 
-The first version must:
+The current implementation must:
 
 - identify the dock model and stable USB identifiers;
 - list the dock component tree and downstream devices;
 - report observable USB, Ethernet, and audio state;
-- report firmware versions when the host exposes them;
+- report component firmware versions through firmware-aware readers;
 - check official Dell firmware availability when a reliable source is known;
 - return human-readable output and machine-readable JSON;
 - explain missing permissions, tools, or device interfaces.
@@ -53,8 +56,8 @@ payloads, or force a downgrade. The native macOS writer currently refuses a
 newer MST payload. It will not run a throughput test, electrical power test,
 display signal test, or audio loopback test.
 
-It will not distribute Dell firmware blobs. Later update support will use
-official Dell packages and verify their integrity before any write operation.
+It will not distribute Dell firmware blobs. The updater uses official Dell
+packages and verifies their integrity before any write operation.
 
 ## Name and commands
 
@@ -67,6 +70,8 @@ dockwarden scan
 dockwarden status
 dockwarden check-updates
 dockwarden doctor
+dockwarden update
+dockwarden update --apply
 ```
 
 Common options:
@@ -79,7 +84,8 @@ dockwarden --version
 
 `scan` focuses on identity and topology. `status` focuses on current device
 state. `check-updates` only reads vendor metadata and reports candidates.
-`doctor` combines checks and prints actionable diagnostics.
+`doctor` combines checks and prints actionable diagnostics. `update` prints a
+plan. `update --apply` is the only write path.
 
 `check-updates` will use official Dell support metadata for the matched model.
 It will record the source URL, package name, release date, package version,
@@ -115,6 +121,7 @@ from the platform bridge.
 7. Render the result as text or JSON with stable field names.
 8. With explicit `update --apply`, verify the Dell CAB and use the platform
    writer: fwupd on Linux or HID/I2C on macOS.
+9. Reconnect the dock and run a read-only status check.
 
 ## Safety and errors
 
@@ -122,6 +129,11 @@ The scan, status, doctor, check-updates, and plan-only update commands are
 read-only. The Linux apply command needs the privilege model configured for
 fwupd. The macOS apply command requires native HID access. Neither command
 invokes `sudo`.
+
+Before a native write, dockwarden checks the WD19 board revision, power
+reading, EC baseline, update status, exact HID topology, candidate hash, and
+component payloads. It relocks maintenance targets after a failed operation
+when the transport still accepts commands.
 
 The CLI must distinguish these states:
 
@@ -153,8 +165,8 @@ Tests will cover:
 - no-device and partial-device states;
 - vendor metadata failure without a false update result.
 
-The live Mac WD19 will be used as an integration fixture. Firmware writes are
-tested only with fake HTTP responses and fake command runners.
+The live Mac WD19 is used only for read-only integration checks. Firmware
+writes are tested only with fake HTTP, HID, and command implementations.
 
 ## Success criteria
 
@@ -174,7 +186,7 @@ the USB device descriptor version alone.
 `dockwarden update` must print a plan without downloading or writing.
 `dockwarden update --apply` must use the verified Linux CAB and fwupd on Linux,
 and the verified CAB plus native HID/I2C on macOS. It must refuse unsupported
-components before writing any component.
+components before writing any component and report staged status honestly.
 
 ## Later phases
 

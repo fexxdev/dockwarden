@@ -14,6 +14,15 @@ not execute Dell Windows packages or accept arbitrary local firmware files.
 The native macOS writer is hardware-facing code. Review the plan with
 `dockwarden update` before using `dockwarden update --apply`.
 
+An `update_staged` result is not proof that the final firmware is active.
+Unplug and reconnect the dock, then run `dockwarden status`. Do not run an
+apply while the dock has unstable power, an unstable USB-C link, or a newer
+MST payload.
+
+The repository test suite, static checks, and build checks never apply a
+firmware update to physical hardware. A first hardware run still needs a
+recovery plan and direct observation of the dock.
+
 ## Reporting
 
 Please report security issues privately through GitHub. Do not disclose an

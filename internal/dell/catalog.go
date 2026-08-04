@@ -27,12 +27,12 @@ type CatalogClient struct {
 
 func PinnedWD19LinuxCandidate() domain.FirmwareCandidate {
 	return domain.FirmwareCandidate{
-		SourceURL:        "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=4p6vj",
-		PackageName:      "DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.04.cab",
-		DownloadURL:      "https://dl.dell.com/FOLDER13269632M/1/DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.04.cab",
-		Version:          "01.01.00.01, 01.01.04.01",
-		ReleaseDate:      "24 Jun 2025",
-		SHA256:           "c91038ac643aabc03ca2a020363af872f74aca2af92f66ee846b1a29cdf13d6d",
+		SourceURL:        "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=389w0",
+		PackageName:      "DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.11.cab",
+		DownloadURL:      "https://dl.dell.com/FOLDER14009221M/1/DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.11.cab",
+		Version:          "01.01.11.01, 01.01.11.01",
+		ReleaseDate:      "19 Apr 2026",
+		SHA256:           "f476fda34db1299da1c251bf04144d892a897a81fad0a40ee0c9771471f41614",
 		Format:           "CAB",
 		SupportedOS:      []string{"Linux"},
 		CompatibleModels: []string{"Dell Dock WD19", "Dell Dock WD22", "Dell HD22", "Dell WD25", "Dell SD25"},
@@ -81,6 +81,12 @@ func ParseDriverPage(sourceURL string, page []byte) (domain.FirmwareCandidate, e
 	}
 	if format == "" {
 		format = "unknown"
+	}
+	if !strings.EqualFold(format, "CAB") || !isCABDownloadURL(downloadURL) {
+		return domain.FirmwareCandidate{}, fmt.Errorf("Dell dock firmware candidate is not a CAB package")
+	}
+	if !containsMetadataValue(supportedOSText, "linux") {
+		return domain.FirmwareCandidate{}, fmt.Errorf("Dell dock firmware candidate does not support Linux")
 	}
 
 	return domain.FirmwareCandidate{
@@ -183,6 +189,8 @@ func (c CatalogClient) fallbackCandidate(model, sourceURL string) (*domain.Firmw
 	}
 	if !isDellSupportURL(candidate.SourceURL) || !isDellSupportURL(candidate.DownloadURL) ||
 		!isDockFirmwarePackage(candidate.PackageName) || !isSHA256(candidate.SHA256) ||
+		!strings.EqualFold(candidate.Format, "CAB") || !isCABDownloadURL(candidate.DownloadURL) ||
+		!containsValue(candidate.SupportedOS, "linux") ||
 		!candidateMatchesModel(candidate, model) {
 		return nil, false
 	}
@@ -281,6 +289,25 @@ func isSimpleVersion(value string) bool {
 
 func isSHA256(value string) bool {
 	return sha256Pattern.MatchString(strings.TrimSpace(value))
+}
+
+func isCABDownloadURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	return err == nil && strings.HasSuffix(strings.ToLower(parsed.Path), ".cab")
+}
+
+func containsMetadataValue(value, wanted string) bool {
+	return containsValue(splitMetadata(value), wanted)
+}
+
+func containsValue(values []string, wanted string) bool {
+	wanted = strings.ToLower(strings.TrimSpace(wanted))
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(strings.TrimSpace(value)), wanted) {
+			return true
+		}
+	}
+	return false
 }
 
 func downloadURLForPackage(page []byte, packageName string) (string, error) {

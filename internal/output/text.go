@@ -32,10 +32,12 @@ func RenderText(w io.Writer, report domain.Report, verbose bool) error {
 		if dock.DescriptorVersion != "" {
 			fmt.Fprintf(&text, "Descriptor version: %s\n", dock.DescriptorVersion)
 		}
-		if dock.FirmwareVersion == "" {
+		if dock.FirmwareVersion == "" && len(dock.Firmware) == 0 {
 			text.WriteString("Firmware version: unavailable\n")
-		} else {
+		} else if dock.FirmwareVersion != "" {
 			fmt.Fprintf(&text, "Firmware version: %s\n", dock.FirmwareVersion)
+		} else {
+			text.WriteString("Firmware version: component details below\n")
 		}
 
 		if len(dock.Services) > 0 {

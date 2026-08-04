@@ -9,6 +9,17 @@ All notable changes to `dockwarden` are recorded here.
 - Added a step-by-step guide for adding support for other docking stations.
 - Added the firmware risk warning to the README.
 
+### Firmware safety
+
+- Bound native HID opens to the detected WD19 location and serial.
+- Added board, power, EC baseline, update-status, retry, and relock guards.
+- Added read-only component firmware reporting on macOS.
+- Reported accepted updates as `update_staged` until the dock is reconnected
+  and checked again.
+- Updated the pinned Dell candidate to driver `389W0` and its verified CAB.
+- Added Dell Akamai request headers and a pinned fallback for metadata HTTP 403.
+- Fixed extraction of root-level firmware members from the 389W0 CAB.
+
 ## [0.3.0-dev] - 2026-08-04
 
 ### Added
@@ -23,7 +34,7 @@ All notable changes to `dockwarden` are recorded here.
 
 ### Changed
 
-- macOS now uses Dell driver `4P6VJ` and the official Linux CAB.
+- macOS and Linux now use Dell driver `389W0` and the official Linux CAB.
 - The Windows Dell updater is never executed.
 
 ## [0.2.0-dev]

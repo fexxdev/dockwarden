@@ -2,11 +2,16 @@
 
 package hid
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/fexxdev/dockwarden/internal/domain"
+)
 
 type Device struct{}
 
-func Open(productID uint16) (*Device, error) {
+func Open(target domain.HIDTarget) (*Device, error) {
+	_ = target
 	return nil, fmt.Errorf("native macOS HID access requires darwin with cgo")
 }
 

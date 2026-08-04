@@ -43,17 +43,41 @@ func matchingDock() *domain.Dock {
 		Model:     "Dell Dock WD19",
 		VendorID:  0x413c,
 		ProductID: 0xb06e,
+		Serial:    "2000",
+		Devices: []domain.USBDevice{
+			{Product: "Dell Dock WD19", Vendor: "Dell Inc.", VendorID: 0x413c, ProductID: 0xb06e, Serial: "2000", Location: "00150000"},
+			{Product: "Dell dock", Vendor: "Dell Inc.", VendorID: 0x413c, ProductID: 0xb06f, Location: "00135000"},
+		},
 	}
 }
 
 func candidateFor(payload []byte) domain.FirmwareCandidate {
 	hash := sha256.Sum256(payload)
 	return domain.FirmwareCandidate{
-		SourceURL:   "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=4p6vj",
-		PackageName: "DellDockFirmwarePackage_WD19_WD22_01.01.04.cab",
-		DownloadURL: "https://dl.dell.com/DellDockFirmwarePackage_WD19_WD22_01.01.04.cab",
-		Version:     "01.01.00.01, 01.01.04.01",
-		SHA256:      hex.EncodeToString(hash[:]),
+		SourceURL:        "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=389w0",
+		PackageName:      "DellDockFirmwarePackage_WD19_WD22_01.01.04.cab",
+		DownloadURL:      "https://dl.dell.com/DellDockFirmwarePackage_WD19_WD22_01.01.04.cab",
+		Version:          "01.01.00.01, 01.01.04.01",
+		Format:           "CAB",
+		SupportedOS:      []string{"Linux"},
+		CompatibleModels: []string{"Dell Dock WD19"},
+		SHA256:           hex.EncodeToString(hash[:]),
+	}
+}
+
+func TestFwupdUpdaterRejectsNonCABBeforeDownload(t *testing.T) {
+	payload := []byte("verified payload")
+	httpClient := &fakeHTTPDoer{}
+	runner := &fakeCommandRunner{}
+	candidate := candidateFor(payload)
+	candidate.Format = "Application"
+	candidate.DownloadURL = strings.TrimSuffix(candidate.DownloadURL, ".cab") + ".exe"
+	result := (FwupdUpdater{HTTP: httpClient, Runner: runner, TempDir: t.TempDir()}).Apply(context.Background(), matchingDock(), &candidate)
+	if result.State != "update_failed" || !strings.Contains(result.Reason, "CAB") {
+		t.Fatalf("unexpected format failure: %+v", result)
+	}
+	if httpClient.request != nil || len(runner.calls) != 0 {
+		t.Fatal("non-CAB candidate must fail before download and fwupdmgr")
 	}
 }
 
@@ -71,8 +95,11 @@ func TestFwupdUpdaterVerifiesAndInstallsDellPayload(t *testing.T) {
 	}
 
 	result := updater.Apply(context.Background(), matchingDock(), candidatePtr(candidateFor(payload)))
-	if result.State != "update_applied" {
+	if result.State != "update_staged" {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+	if !strings.Contains(result.Reason, "reconnect") {
+		t.Fatalf("expected reconnect instruction, got: %s", result.Reason)
 	}
 	if len(runner.calls) != 1 || len(runner.calls[0]) != 4 || runner.calls[0][0] != "fwupdmgr" || runner.calls[0][1] != "local-install" || runner.calls[0][3] != "--assume-yes" {
 		t.Fatalf("unexpected fwupdmgr call: %v", runner.calls)
@@ -82,6 +109,64 @@ func TestFwupdUpdaterVerifiesAndInstallsDellPayload(t *testing.T) {
 	}
 	if httpClient.request == nil || httpClient.request.URL.String() != candidateFor(payload).DownloadURL {
 		t.Fatalf("unexpected download request: %+v", httpClient.request)
+	}
+}
+
+func TestFwupdUpdaterUsesBrowserHeadersForDellDownload(t *testing.T) {
+	payload := []byte("browser-compatible payload")
+	httpClient := &fakeHTTPDoer{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(payload)),
+	}}
+	runner := &fakeCommandRunner{}
+	candidate := candidateFor(payload)
+	result := (FwupdUpdater{HTTP: httpClient, Runner: runner, TempDir: t.TempDir()}).Apply(context.Background(), matchingDock(), &candidate)
+	if result.State != "update_staged" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if httpClient.request == nil {
+		t.Fatal("expected a Dell download request")
+	}
+	if httpClient.request.Header.Get("User-Agent") == "" {
+		t.Fatal("Dell download must send a browser user agent")
+	}
+	if httpClient.request.Header.Get("Referer") != "https://www.dell.com/" {
+		t.Fatalf("unexpected Dell download referer: %q", httpClient.request.Header.Get("Referer"))
+	}
+}
+
+func TestFwupdUpdaterRejectsUnsupportedCandidateBeforeDownload(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(*domain.FirmwareCandidate)
+	}{
+		{
+			name: "non-linux",
+			edit: func(candidate *domain.FirmwareCandidate) {
+				candidate.SupportedOS = []string{"Windows"}
+			},
+		},
+		{
+			name: "wrong-model",
+			edit: func(candidate *domain.FirmwareCandidate) {
+				candidate.CompatibleModels = []string{"Dell Dock WD22"}
+			},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			httpClient := &fakeHTTPDoer{}
+			runner := &fakeCommandRunner{}
+			candidate := candidateFor([]byte("payload"))
+			testCase.edit(&candidate)
+			result := (FwupdUpdater{HTTP: httpClient, Runner: runner, TempDir: t.TempDir()}).Apply(context.Background(), matchingDock(), &candidate)
+			if result.State != "update_failed" || !strings.Contains(result.Reason, "WD19") {
+				t.Fatalf("unexpected candidate failure: %+v", result)
+			}
+			if httpClient.request != nil || len(runner.calls) != 0 {
+				t.Fatal("unsupported candidate must fail before download and fwupdmgr")
+			}
+		})
 	}
 }
 

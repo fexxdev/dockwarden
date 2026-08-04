@@ -52,3 +52,24 @@ func TestRenderTextIncludesObservableState(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderTextReportsComponentFirmwareAsAvailable(t *testing.T) {
+	report := domain.Report{
+		Dock: &domain.Dock{
+			Model: "Dell Dock WD19",
+			Firmware: []domain.FirmwareObservation{{
+				Component: "embedded_controller",
+				Version:   "01.01.00.13",
+				Source:    "macos_hid",
+			}},
+		},
+	}
+	var out bytes.Buffer
+	if err := RenderText(&out, report, false); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "Firmware version: component details below") || strings.Contains(text, "Firmware version: unavailable") {
+		t.Fatalf("unexpected firmware summary:\n%s", text)
+	}
+}

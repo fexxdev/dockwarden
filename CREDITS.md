@@ -9,7 +9,7 @@ The project uses these external references and system components:
   sequencing. fwupd remains a separate project with its own license.
 - [fwupd Dell Dock documentation](https://fwupd.github.io/libfwupdplugin/dell-dock-README.html):
   device identifiers and protocol scope.
-- [Dell WD19 firmware driver](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=4p6vj):
+- [Dell WD19 firmware driver](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=389w0):
   official package metadata and firmware payload source.
 - [Dell WD19 Administrator Guide](https://www.dell.com/support/manuals/en-us/dell-wd19-130w-dock/wd19_administrator_guide/updating-the-firmware):
   vendor update guidance.

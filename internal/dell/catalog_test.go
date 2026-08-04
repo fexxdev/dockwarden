@@ -41,18 +41,25 @@ func TestParseDriverPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if candidate.PackageName != "DellDock_WD19_WD22_FW_01.00.36.exe" ||
+	if candidate.PackageName != "DellDockFirmwarePackage_WD19_WD22_FW_01.00.36.cab" ||
 		candidate.Version != "01.00.36" ||
 		candidate.ReleaseDate != "15 Apr 2026" ||
-		candidate.DownloadURL != "https://dl.dell.com/DellDock_WD19_WD22_FW_01.00.36.exe" {
+		candidate.DownloadURL != "https://dl.dell.com/DellDockFirmwarePackage_WD19_WD22_FW_01.00.36.cab" {
 		t.Fatalf("unexpected candidate identity: %+v", candidate)
 	}
 	if candidate.SHA256 != "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" {
 		t.Fatalf("unexpected checksum: %+v", candidate)
 	}
-	if candidate.Format != "Application" || len(candidate.SupportedOS) != 3 ||
+	if candidate.Format != "CAB" || len(candidate.SupportedOS) != 3 ||
 		len(candidate.CompatibleModels) != 2 {
 		t.Fatalf("unexpected candidate metadata: %+v", candidate)
+	}
+}
+
+func TestParseDriverPageRejectsNonCABFirmware(t *testing.T) {
+	page := []byte(`<div>Version: 01.00.36</div><div>Release Date: 15 Apr 2026</div><div>File Name: DellDock_WD19_FW.exe</div><div>File Format: Application</div><div>SHA-256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef</div><div>Operating Systems: Linux</div><div>Compatible Systems: Dell Dock WD19</div><a href="https://dl.dell.com/DellDock_WD19_FW.exe">download</a>`)
+	if _, err := ParseDriverPage(wd19SourceURL, page); err == nil || !strings.Contains(err.Error(), "CAB") {
+		t.Fatalf("expected non-CAB rejection, got %v", err)
 	}
 }
 
@@ -64,12 +71,12 @@ func TestParseDriverPageRequiresHash(t *testing.T) {
 }
 
 func TestParseDriverPageHandlesComponentVersionsAndLists(t *testing.T) {
-	page := []byte("<div>Version : 01.01.03.01, 01.01.14.01</div><div>Release Date : 30 Apr 2026</div><div>File Name : DellDockFirmwarePackage_WD19_WD22_01.01.14.exe</div><div>SHA-256 : 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef</div><h2>Compatible Systems</h2><a>Dell 14 D14260</a><a>Dell Dock WD19</a><h2>Supported Operating Systems</h2><p>Windows 11</p><a href=\"https://dl.dell.com/DellDockFirmwarePackage_WD19_WD22_01.01.14.exe\">download</a>")
+	page := []byte("<div>Version : 01.01.11.01</div><div>Release Date : 19 Apr 2026</div><div>File Name : DellDockFirmwarePackage_WD19_WD22_01.01.11.cab</div><div>File Format : CAB</div><div>SHA-256 : 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef</div><h2>Compatible Systems</h2><a>Dell 14 D14260</a><a>Dell Dock WD19</a><h2>Supported Operating Systems</h2><p>Linux</p><a href=\"https://dl.dell.com/DellDockFirmwarePackage_WD19_WD22_01.01.11.cab\">download</a>")
 	candidate, err := ParseDriverPage(wd19SourceURL, page)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if candidate.Version != "01.01.03.01, 01.01.14.01" {
+	if candidate.Version != "01.01.11.01" {
 		t.Fatalf("unexpected component versions: %+v", candidate)
 	}
 	foundWD19 := false
@@ -130,12 +137,13 @@ func TestCatalogCheckHandlesNetworkFailure(t *testing.T) {
 
 func TestCatalogCheckUsesPinnedCandidateOnDellForbidden(t *testing.T) {
 	pinned := domain.FirmwareCandidate{
-		PackageName:      "DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.04.cab",
-		DownloadURL:      "https://dl.dell.com/FOLDER13269632M/1/DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.04.cab",
-		Version:          "01.01.00.01, 01.01.04.01",
-		ReleaseDate:      "24 Jun 2025",
-		SHA256:           "c91038ac643aabc03ca2a020363af872f74aca2af92f66ee846b1a29cdf13d6d",
+		PackageName:      "DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.11.cab",
+		DownloadURL:      "https://dl.dell.com/FOLDER14009221M/1/DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.11.cab",
+		Version:          "01.01.11.01, 01.01.11.01",
+		ReleaseDate:      "19 Apr 2026",
+		SHA256:           "f476fda34db1299da1c251bf04144d892a897a81fad0a40ee0c9771471f41614",
 		Format:           "CAB",
+		SupportedOS:      []string{"Linux"},
 		CompatibleModels: []string{"Dell Dock WD19"},
 	}
 	client := CatalogClient{

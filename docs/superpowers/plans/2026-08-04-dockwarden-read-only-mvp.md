@@ -1,4 +1,8 @@
-# Dockwarden Read-Only MVP Implementation Plan
+# Dockwarden Read-Only MVP Implementation Plan (Historical)
+
+> Status: this plan describes the original read-only foundation. It is
+> superseded by the guarded firmware update path. Its historical constraints
+> do not describe the current `update --apply` behavior.
 
 > For agentic workers: REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
