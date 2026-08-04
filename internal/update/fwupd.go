@@ -211,3 +211,9 @@ type systemRunner struct{}
 func (systemRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
+
+func (systemRunner) RunWithEnv(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, name, args...)
+	command.Env = append(os.Environ(), env...)
+	return command.CombinedOutput()
+}

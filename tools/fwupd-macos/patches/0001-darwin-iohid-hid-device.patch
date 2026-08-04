@@ -1,0 +1,427 @@
+diff --git a/libfwupdplugin/fu-hid-device.c b/libfwupdplugin/fu-hid-device.c
+index 247663f..7e42601 100644
+--- a/libfwupdplugin/fu-hid-device.c
++++ b/libfwupdplugin/fu-hid-device.c
+@@ -12,6 +12,12 @@
+ #include "fu-hid-device.h"
+ #include "fu-usb-endpoint.h"
+ 
++#ifdef __APPLE__
++#include <CoreFoundation/CoreFoundation.h>
++#include <IOKit/IOReturn.h>
++#include <IOKit/hid/IOHIDManager.h>
++#endif
++
+ #define FU_HID_REPORT_GET 0x01
+ #define FU_HID_REPORT_SET 0x09
+ 
+@@ -35,6 +41,10 @@ typedef struct {
+ 	guint8 ep_addr_out; /* only for _USE_INTERRUPT_TRANSFER */
+ 	gboolean interface_autodetect;
+ 	FuHidDeviceFlags flags;
++#ifdef __APPLE__
++	IOHIDDeviceRef hid_device;
++	IOHIDManagerRef hid_manager;
++#endif
+ } FuHidDevicePrivate;
+ 
+ G_DEFINE_TYPE_WITH_PRIVATE(FuHidDevice, fu_hid_device, FU_TYPE_USB_DEVICE)
+@@ -123,6 +133,7 @@ fu_hid_device_parse_descriptors(FuHidDevice *self, GError **error)
+ 	return g_steal_pointer(&descriptors);
+ }
+ 
++#ifndef __APPLE__
+ static gboolean
+ fu_hid_device_autodetect_eps(FuHidDevice *self, FuUsbInterface *iface, GError **error)
+ {
+@@ -150,6 +161,7 @@ fu_hid_device_autodetect_eps(FuHidDevice *self, FuUsbInterface *iface, GError **
+ 	}
+ 	return TRUE;
+ }
++#endif
+ 
+ static gboolean
+ fu_hid_device_setup(FuDevice *device, GError **error)
+@@ -184,10 +196,297 @@ fu_hid_device_setup(FuDevice *device, GError **error)
+ 	return TRUE;
+ }
+ 
++#ifdef __APPLE__
++static gboolean
++fu_hid_device_darwin_matches_serial(IOHIDDeviceRef device, const gchar *serial)
++{
++	CFTypeRef raw_serial;
++	gchar actual_serial[256] = {0};
++
++	if (serial == NULL || serial[0] == '\0')
++		return TRUE;
++	raw_serial = IOHIDDeviceGetProperty(device, CFSTR(kIOHIDSerialNumberKey));
++	if (raw_serial == NULL || CFGetTypeID(raw_serial) != CFStringGetTypeID())
++		return FALSE;
++	if (!CFStringGetCString((CFStringRef)raw_serial,
++				actual_serial,
++				sizeof(actual_serial),
++				kCFStringEncodingUTF8))
++		return FALSE;
++	return g_strcmp0(actual_serial, serial) == 0;
++}
++
++static gboolean
++fu_hid_device_open_darwin(FuHidDevice *self, GError **error)
++{
++	FuHidDevicePrivate *priv = GET_PRIVATE(self);
++	FuDevice *device = FU_DEVICE(self);
++	const gchar *serial = fu_device_get_serial(device);
++	IOHIDManagerRef manager = NULL;
++	CFMutableDictionaryRef matching = NULL;
++	CFSetRef devices = NULL;
++	IOHIDDeviceRef selected = NULL;
++	IOHIDDeviceRef *values = NULL;
++	CFNumberRef vendor = NULL;
++	CFNumberRef product = NULL;
++	CFIndex count = 0;
++	guint matches = 0;
++	guint32 vendor_id = fu_device_get_vid(device);
++	guint32 product_id = fu_device_get_pid(device);
++	IOReturn status = kIOReturnSuccess;
++	gboolean manager_open = FALSE;
++	gboolean ret = FALSE;
++
++	manager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
++	if (manager == NULL) {
++		g_set_error_literal(error,
++				    FWUPD_ERROR,
++				    FWUPD_ERROR_INTERNAL,
++				    "cannot create the macOS HID manager");
++		goto out;
++	}
++	matching = CFDictionaryCreateMutable(kCFAllocatorDefault,
++					     0,
++					     &kCFTypeDictionaryKeyCallBacks,
++					     &kCFTypeDictionaryValueCallBacks);
++	if (matching == NULL) {
++		g_set_error_literal(error,
++				    FWUPD_ERROR,
++				    FWUPD_ERROR_INTERNAL,
++				    "cannot create the macOS HID match dictionary");
++		goto out;
++	}
++
++	vendor = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &vendor_id);
++	product = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &product_id);
++	if (vendor == NULL || product == NULL) {
++		if (vendor != NULL)
++			CFRelease(vendor);
++		if (product != NULL)
++			CFRelease(product);
++		g_set_error_literal(error,
++				    FWUPD_ERROR,
++				    FWUPD_ERROR_INTERNAL,
++				    "cannot create the macOS HID match values");
++		goto out;
++	}
++	CFDictionarySetValue(matching, CFSTR(kIOHIDVendorIDKey), vendor);
++	CFDictionarySetValue(matching, CFSTR(kIOHIDProductIDKey), product);
++	CFRelease(vendor);
++	CFRelease(product);
++
++	IOHIDManagerSetDeviceMatching(manager, matching);
++	status = IOHIDManagerOpen(manager, kIOHIDOptionsTypeNone);
++	if (status != kIOReturnSuccess) {
++		g_set_error(error,
++			    FWUPD_ERROR,
++			    FWUPD_ERROR_NOT_SUPPORTED,
++			    "cannot open the macOS HID manager for %04x:%04x: IOKit 0x%x",
++			    vendor_id,
++			    product_id,
++			    (guint32)status);
++		goto out;
++	}
++	manager_open = TRUE;
++	devices = IOHIDManagerCopyDevices(manager);
++	if (devices == NULL) {
++		g_set_error(error,
++			    FWUPD_ERROR,
++			    FWUPD_ERROR_NOT_FOUND,
++			    "no macOS HID device found for %04x:%04x",
++			    vendor_id,
++			    product_id);
++		goto out;
++	}
++	count = CFSetGetCount(devices);
++	if (count == 0) {
++		g_set_error(error,
++			    FWUPD_ERROR,
++			    FWUPD_ERROR_NOT_FOUND,
++			    "no macOS HID device found for %04x:%04x",
++			    vendor_id,
++			    product_id);
++		goto out;
++	}
++	values = g_new0(IOHIDDeviceRef, count);
++	CFSetGetValues(devices, (const void **)values);
++	for (CFIndex i = 0; i < count; i++) {
++		if (!fu_hid_device_darwin_matches_serial(values[i], serial))
++			continue;
++		selected = values[i];
++		matches++;
++	}
++	if (matches == 0) {
++		g_set_error(error,
++			    FWUPD_ERROR,
++			    FWUPD_ERROR_NOT_FOUND,
++			    "macOS HID device %04x:%04x does not match serial %s",
++			    vendor_id,
++			    product_id,
++			    serial != NULL ? serial : "<none>");
++		goto out;
++	}
++	if (matches != 1) {
++		g_set_error(error,
++			    FWUPD_ERROR,
++			    FWUPD_ERROR_NOT_SUPPORTED,
++			    "macOS HID device selection is ambiguous for %04x:%04x (%u matches)",
++			    vendor_id,
++			    product_id,
++			    matches);
++		goto out;
++	}
++	status = IOHIDDeviceOpen(selected, kIOHIDOptionsTypeNone);
++	if (status != kIOReturnSuccess) {
++		g_set_error(error,
++			    FWUPD_ERROR,
++			    FWUPD_ERROR_PERMISSION_DENIED,
++			    "cannot open macOS HID device %04x:%04x: IOKit 0x%x",
++			    vendor_id,
++			    product_id,
++			    (guint32)status);
++		goto out;
++	}
++	CFRetain(selected);
++	priv->hid_device = selected;
++	priv->hid_manager = manager;
++	manager = NULL;
++	ret = TRUE;
++
++out:
++	if (values != NULL)
++		g_free(values);
++	if (devices != NULL)
++		CFRelease(devices);
++	if (matching != NULL)
++		CFRelease(matching);
++	if (manager != NULL) {
++		if (manager_open)
++			IOHIDManagerClose(manager, kIOHIDOptionsTypeNone);
++		CFRelease(manager);
++	}
++	return ret;
++}
++
++static void
++fu_hid_device_close_darwin(FuHidDevice *self)
++{
++	FuHidDevicePrivate *priv = GET_PRIVATE(self);
++
++	if (priv->hid_device != NULL) {
++		IOHIDDeviceClose(priv->hid_device, kIOHIDOptionsTypeNone);
++		CFRelease(priv->hid_device);
++		priv->hid_device = NULL;
++	}
++	if (priv->hid_manager != NULL) {
++		IOHIDManagerClose(priv->hid_manager, kIOHIDOptionsTypeNone);
++		CFRelease(priv->hid_manager);
++		priv->hid_manager = NULL;
++	}
++}
++
++typedef struct {
++	IOReturn status;
++	gboolean done;
++	CFIndex length;
++} FuHidDeviceDarwinReport;
++
++static void
++fu_hid_device_darwin_report_cb(void *context,
++			       IOReturn status,
++			       void *sender,
++			       IOHIDReportType type,
++			       uint32_t report_id,
++			       uint8_t *report,
++			       CFIndex length)
++{
++	FuHidDeviceDarwinReport *state = context;
++	(void)sender;
++	(void)type;
++	(void)report_id;
++	(void)report;
++	state->status = status;
++	state->length = length;
++	state->done = TRUE;
++}
++
++static IOReturn
++fu_hid_device_darwin_report(FuHidDevicePrivate *priv,
++			    gboolean set_report,
++			    IOHIDReportType type,
++			    guint8 *buf,
++			    gsize bufsz,
++			    guint timeout,
++			    gsize *actual_length)
++{
++	FuHidDeviceDarwinReport state = {
++	    .status = kIOReturnTimeout,
++	    .done = FALSE,
++	    .length = 0,
++	};
++	CFIndex length = (CFIndex)bufsz;
++	CFRunLoopRef run_loop = CFRunLoopGetCurrent();
++	CFTimeInterval timeout_ms = timeout != 0 ? (CFTimeInterval)timeout : 2000.0;
++	CFAbsoluteTime deadline =
++	    CFAbsoluteTimeGetCurrent() + ((timeout_ms + 500.0) / 1000.0);
++	IOReturn status;
++
++	IOHIDDeviceScheduleWithRunLoop(priv->hid_device, run_loop, kCFRunLoopDefaultMode);
++	if (set_report) {
++		status = IOHIDDeviceSetReportWithCallback(priv->hid_device,
++							  type,
++							  0,
++							  buf,
++							  length,
++							  timeout_ms,
++							  fu_hid_device_darwin_report_cb,
++							  &state);
++	} else {
++		status = IOHIDDeviceGetReportWithCallback(priv->hid_device,
++							  type,
++							  0,
++							  buf,
++							  &length,
++							  timeout_ms,
++							  fu_hid_device_darwin_report_cb,
++							  &state);
++	}
++	if (status == kIOReturnSuccess) {
++		while (!state.done && CFAbsoluteTimeGetCurrent() < deadline)
++			CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, true);
++		if (!state.done)
++			state.status = kIOReturnTimeout;
++		status = state.status;
++	}
++	IOHIDDeviceUnscheduleFromRunLoop(priv->hid_device, run_loop, kCFRunLoopDefaultMode);
++	if (status == kIOReturnSuccess && actual_length != NULL)
++		*actual_length = set_report ? bufsz : state.length;
++	return status;
++}
++
++static gboolean
++fu_hid_device_darwin_report_error(IOReturn status, const gchar *operation, GError **error)
++{
++	if (status == kIOReturnSuccess)
++		return TRUE;
++	g_set_error(error,
++		    FWUPD_ERROR,
++		    status == kIOReturnTimeout ? FWUPD_ERROR_TIMED_OUT : FWUPD_ERROR_INTERNAL,
++		    "%s failed through macOS IOKit: 0x%x",
++		    operation,
++		    (guint32)status);
++	return FALSE;
++}
++#endif
++
+ static gboolean
+ fu_hid_device_open(FuDevice *device, GError **error)
+ {
+ 	FuHidDevice *self = FU_HID_DEVICE(device);
++#ifdef __APPLE__
++	/* macOS owns the USB HID interface, so libusb cannot claim it reliably. */
++	return fu_hid_device_open_darwin(self, error);
++#else
+ 	FuHidDevicePrivate *priv = GET_PRIVATE(self);
+ 	FuUsbDeviceClaimFlags flags = 0;
+ 
+@@ -236,12 +535,17 @@ fu_hid_device_open(FuDevice *device, GError **error)
+ 
+ 	/* success */
+ 	return TRUE;
++#endif
+ }
+ 
+ static gboolean
+ fu_hid_device_close(FuDevice *device, GError **error)
+ {
+ 	FuHidDevice *self = FU_HID_DEVICE(device);
++#ifdef __APPLE__
++	fu_hid_device_close_darwin(self);
++	return TRUE;
++#else
+ 	FuHidDevicePrivate *priv = GET_PRIVATE(self);
+ 	FuUsbDeviceClaimFlags flags = 0;
+ 	g_autoptr(GError) error_local = NULL;
+@@ -270,6 +574,7 @@ fu_hid_device_close(FuDevice *device, GError **error)
+ 
+ 	/* FuUsbDevice->close */
+ 	return FU_DEVICE_CLASS(fu_hid_device_parent_class)->close(device, error);
++#endif
+ }
+ 
+ /**
+@@ -421,6 +726,21 @@ fu_hid_device_set_report_internal(FuHidDevice *self, FuHidDeviceRetryHelper *hel
+ 	FuHidDevicePrivate *priv = GET_PRIVATE(self);
+ 	gsize actual_len = 0;
+ 
++#ifdef __APPLE__
++	if (priv->hid_device != NULL) {
++		IOReturn status = fu_hid_device_darwin_report(priv,
++							      TRUE,
++							      (helper->flags & FU_HID_DEVICE_FLAG_IS_FEATURE) != 0 ?
++								  kIOHIDReportTypeFeature :
++								  kIOHIDReportTypeOutput,
++							      helper->buf,
++							      helper->bufsz,
++							      helper->timeout,
++							      &actual_len);
++		if (!fu_hid_device_darwin_report_error(status, "SetReport", error))
++			return FALSE;
++	} else
++#endif
+ 	/* what method do we use? */
+ 	if (helper->flags & FU_HID_DEVICE_FLAG_USE_INTERRUPT_TRANSFER) {
+ 		g_autofree gchar *title =
+@@ -552,6 +872,21 @@ fu_hid_device_get_report_internal(FuHidDevice *self, FuHidDeviceRetryHelper *hel
+ 	FuHidDevicePrivate *priv = GET_PRIVATE(self);
+ 	gsize actual_len = 0;
+ 
++#ifdef __APPLE__
++	if (priv->hid_device != NULL) {
++		IOReturn status = fu_hid_device_darwin_report(priv,
++							      FALSE,
++							      (helper->flags & FU_HID_DEVICE_FLAG_IS_FEATURE) != 0 ?
++								  kIOHIDReportTypeFeature :
++								  kIOHIDReportTypeInput,
++							      helper->buf,
++							      helper->bufsz,
++							      helper->timeout,
++							      &actual_len);
++		if (!fu_hid_device_darwin_report_error(status, "GetReport", error))
++			return FALSE;
++	} else
++#endif
+ 	/* what method do we use? */
+ 	if (helper->flags & FU_HID_DEVICE_FLAG_USE_INTERRUPT_TRANSFER) {
+ 		g_autofree gchar *title = NULL;
+diff --git a/meson.build b/meson.build
+index 23d5828..9cc1892 100644
+--- a/meson.build
++++ b/meson.build
+@@ -520,6 +520,9 @@ if get_option('default_library') != 'static'
+       required: false,
+     )
+   endif
++  if host_machine.system() == 'darwin'
++    platform_deps += dependency('appleframeworks', modules: ['CoreFoundation', 'IOKit'])
++  endif
+ endif
+ 
+ if valgrind.found()
+

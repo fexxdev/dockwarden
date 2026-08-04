@@ -21,13 +21,11 @@ The utility can:
 - report USB, Ethernet, audio, and downstream USB enumeration;
 - check official Dell firmware metadata;
 - update the WD19 through `fwupdmgr` on Linux;
-- update supported WD19 components through native HID on macOS.
+- update the WD19 through upstream `fwupdtool` on macOS.
 
-The native macOS writer updates the embedded controller, USB Gen1 hub, USB
-Gen2 hub, and package metadata. It reads and compares MST firmware. It refuses
-a newer MST payload until a native MST writer is available. Before any write,
-it checks the dock type, board revision, power reading, EC baseline, update
-status, target identity, package hash, and every component payload.
+The macOS status reader uses direct HID access. The macOS write path uses the
+upstream Dell Dock plugin in standalone `fwupdtool`, with libusb enumeration
+and an IOHIDManager transport for HID reports.
 
 The utility does not execute Dell Windows `.exe` packages. It does not accept
 arbitrary payloads, forced downgrades, or unverified firmware files.
@@ -42,11 +40,13 @@ Build a native binary with Go 1.22 or newer:
 go build -o dockwarden ./cmd/dockwarden
 ```
 
-On macOS, build with cgo enabled. The native writer uses IOKit, CoreFoundation,
-and the system `bsdtar` command. The dock must be connected before the command
-runs. macOS may require HID or Input Monitoring permission for the terminal.
-If `status` reports denied HID access, grant that permission and run it again.
-The updater refuses to continue when direct HID access is unavailable.
+On macOS, build with cgo enabled. The status reader uses IOKit and
+CoreFoundation. Build the upstream `fwupdtool` port first; see
+[the macOS build guide](tools/fwupd-macos/README.md). Set
+`DOCKWARDEN_FWUPDTOOL` to its path. If the variable is empty, Dockwarden uses
+`fwupdtool` from `PATH`. macOS may require HID or Input Monitoring permission
+for the terminal. If `status` reports denied HID access, grant that permission
+and run it again.
 
 On Linux, install `fwupdmgr` and use the privilege model configured by the
 system. `dockwarden` does not invoke `sudo`.
@@ -76,8 +76,8 @@ Apply a firmware update:
 
 `update` is read-only. Only `update --apply` can download and write firmware.
 The updater accepts the official Dell CAB, verifies its SHA-256, and removes
-the temporary file after use. It binds macOS HID access to the detected dock
-location and serial. It refuses an ambiguous target.
+the temporary file after use. On macOS it runs upstream `fwupdtool` with the
+Dell Dock plugin and isolated temporary state.
 
 An apply result of `update_staged` means that the platform accepted the update
 and requires a physical reconnect. Unplug and reconnect the dock USB-C cable.
@@ -126,6 +126,7 @@ dock. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 ## Documentation and credits
 
 - [Adding support for another docking station](docs/ADDING-DOCK-SUPPORT.md)
+- [Building the macOS fwupdtool port](tools/fwupd-macos/README.md)
 - [Change log](CHANGELOG.md)
 - [Credits and external projects](CREDITS.md)
 - [Security policy](SECURITY.md)

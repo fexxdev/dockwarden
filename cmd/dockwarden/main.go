@@ -50,9 +50,9 @@ func main() {
 		dependencies.Inspector = discovery.MacInspector{
 			Firmware: update.MacFirmwareReader{Open: openHID},
 		}
-		dependencies.Updater = update.MacUpdater{
-			HTTP: httpClient,
-			Open: openHID,
+		dependencies.Updater = update.FwupdToolUpdater{
+			HTTP:     httpClient,
+			ToolPath: os.Getenv(update.FwupdToolEnvironmentVariable),
 		}
 		driverURL = wd19LinuxDriverURL
 	case "linux":

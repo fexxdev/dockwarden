@@ -1,0 +1,2 @@
+# Unified diff files preserve source indentation and diff markers by design.
+*.patch whitespace=-trailing-space,-space-before-tab,-blank-at-eof

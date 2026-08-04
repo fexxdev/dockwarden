@@ -11,8 +11,10 @@ transport, and update safety checks.
 Dell HTTPS downloads and verifies the published SHA-256 before writing. It does
 not execute Dell Windows packages or accept arbitrary local firmware files.
 
-The native macOS writer is hardware-facing code. Review the plan with
-`dockwarden update` before using `dockwarden update --apply`.
+The macOS production writer delegates to the pinned upstream Dell Dock plugin
+in standalone `fwupdtool`. The native HID code remains for direct status reads
+and protocol regression tests. Review the plan with `dockwarden update` before
+using `dockwarden update --apply`.
 
 An `update_staged` result is not proof that the final firmware is active.
 Unplug and reconnect the dock, then run `dockwarden status`. Do not run an

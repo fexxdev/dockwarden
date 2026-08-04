@@ -15,9 +15,12 @@ The project uses these external references and system components:
   vendor update guidance.
 - [Apple IOKit and CoreFoundation](https://developer.apple.com/documentation/iokit):
   macOS system frameworks used for HID access.
+- [libusb](https://libusb.info/): the macOS USB backend used by the standalone
+  fwupdtool build.
+- [Meson](https://mesonbuild.com/), [Ninja](https://ninja-build.org/), and
+  [Rust](https://www.rust-lang.org/): tools used to build upstream fwupdtool.
 - [Go](https://go.dev/): the language and standard library.
-- `bsdtar`/libarchive: the system archive reader used to extract CAB members
-  on macOS.
+- `bsdtar`/libarchive: retained by the native HID protocol regression path.
 
 Dell, WD19, fwupd, Apple, macOS, and Go are trademarks or project names owned
 by their respective holders. This project is not affiliated with Dell, Apple,

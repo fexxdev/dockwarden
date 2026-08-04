@@ -19,6 +19,8 @@ All notable changes to `dockwarden` are recorded here.
 - Updated the pinned Dell candidate to driver `389W0` and its verified CAB.
 - Added Dell Akamai request headers and a pinned fallback for metadata HTTP 403.
 - Fixed extraction of root-level firmware members from the 389W0 CAB.
+- Added a macOS bridge to upstream standalone `fwupdtool` 2.2.1.
+- Added an isolated macOS fwupdtool build with the libusb backend.
 
 ## [0.3.0-dev] - 2026-08-04
 
@@ -30,6 +32,7 @@ All notable changes to `dockwarden` are recorded here.
 - Pre-write version checks and MST safety guards.
 - Pinned Dell CAB fallback when the Dell metadata page returns HTTP 403.
 - Tests for HID packets, firmware version comparison, and guarded writes.
+- Tests for the macOS fwupdtool bridge and its temporary state isolation.
 - Cross-platform CI, security guidance, contribution guidance, and project credits.
 
 ### Changed
