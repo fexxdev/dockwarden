@@ -12,10 +12,12 @@ import (
 	"github.com/fexxdev/dockwarden/internal/cli"
 	"github.com/fexxdev/dockwarden/internal/dell"
 	"github.com/fexxdev/dockwarden/internal/discovery"
+	"github.com/fexxdev/dockwarden/internal/update"
 )
 
-const version = "0.1.0-dev"
-const wd19DriverURL = "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=nkjg6"
+const version = "0.2.0-dev"
+const wd19MacDriverURL = "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=nkjg6"
+const wd19LinuxDriverURL = "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=4p6vj"
 
 func main() {
 	options, err := cli.Parse(os.Args[1:])
@@ -37,19 +39,23 @@ func main() {
 		Out: os.Stdout,
 		Err: os.Stderr,
 	}
+	httpClient := &http.Client{Timeout: 15 * time.Second}
+	driverURL := wd19MacDriverURL
 	switch runtime.GOOS {
 	case "darwin":
 		dependencies.Inspector = discovery.MacInspector{}
 	case "linux":
 		dependencies.Inspector = discovery.LinuxInspector{}
+		dependencies.Updater = update.FwupdUpdater{HTTP: httpClient}
+		driverURL = wd19LinuxDriverURL
 	default:
 		fmt.Fprintf(os.Stderr, "dockwarden: unsupported platform %s\n", runtime.GOOS)
 		os.Exit(2)
 	}
 	dependencies.Updates = dell.CatalogClient{
-		HTTP: &http.Client{Timeout: 15 * time.Second},
+		HTTP: httpClient,
 		Sources: map[string]string{
-			"Dell Dock WD19": wd19DriverURL,
+			"Dell Dock WD19": driverURL,
 		},
 	}
 

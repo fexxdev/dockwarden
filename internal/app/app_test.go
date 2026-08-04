@@ -209,3 +209,33 @@ func TestRunUpdateAppliesOnlyWithApply(t *testing.T) {
 		t.Fatal("expected updater to receive the detected dock and candidate")
 	}
 }
+
+func TestRunUpdateReportsUnsupportedWithoutBackend(t *testing.T) {
+	inspector := &fakeInspector{report: detectedReport()}
+	updates := &fakeUpdateChecker{result: domain.UpdateCheck{
+		State:     "update_available",
+		SourceURL: "https://www.dell.com/support/drivers",
+		Candidate: &domain.FirmwareCandidate{PackageName: "wd19.cab"},
+	}}
+	var out bytes.Buffer
+	code := Run(context.Background(), cli.Options{
+		Command: "update",
+		Apply:   true,
+		JSON:    true,
+	}, Dependencies{
+		Inspector: inspector,
+		Updates:   updates,
+		Out:       &out,
+		Err:       &bytes.Buffer{},
+	})
+	if code != 2 {
+		t.Fatalf("expected unsupported apply exit code 2, got %d", code)
+	}
+	var report domain.Report
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Update == nil || report.Update.State != "unsupported" {
+		t.Fatalf("unexpected unsupported result: %+v", report.Update)
+	}
+}

@@ -1,9 +1,16 @@
 # Dockwarden design
 ## Current implementation
 
-The read-only MVP uses the Dell WD19 USB identifiers `0x413c:0xb06e` and parses macOS IORegistry or Linux `lsusb` output.
+The utility uses the Dell WD19 USB identifiers `0x413c:0xb06e` and parses
+macOS IORegistry or Linux `lsusb` output.
 
-The update check reads the official WD19 driver metadata page. It accepts a candidate only when the page provides a compatible model, version, release date, package name, and SHA-256. It does not download or execute a firmware package.
+The update check reads the official WD19 driver metadata page. It accepts a
+candidate only when the page provides a compatible model, version, release
+date, package name, HTTPS Dell download URL, and SHA-256.
+
+Linux `update --apply` downloads the official Dell CAB, verifies its SHA-256,
+and invokes `fwupdmgr local-install`. macOS keeps the metadata check but blocks
+the write path because Dell publishes a Windows executable for that platform.
 
 Date: 2026-08-04
 
@@ -40,8 +47,9 @@ versions. They must never be labelled or compared as dock firmware versions.
 
 ## Non-goals
 
-The first version will not flash firmware. It will not run a throughput test,
-electrical power test, display signal test, or audio loopback test.
+The current write path will not execute Dell Windows packages, accept arbitrary
+payloads, force a downgrade, or run on macOS. It will not run a throughput
+test, electrical power test, display signal test, or audio loopback test.
 
 It will not distribute Dell firmware blobs. Later update support will use
 official Dell packages and verify their integrity before any write operation.
@@ -100,12 +108,16 @@ later step, after the read-only model and version checks are verified.
 3. Match identifiers against the WD19 family.
 4. Collect component descriptors and available version fields.
 5. Collect host-visible service state for Ethernet, audio, and USB children.
-6. Query official Dell metadata only for `check-updates`.
+6. Query official Dell metadata for `check-updates` and the `update` plan.
 7. Render the result as text or JSON with stable field names.
+8. With explicit `update --apply` on Linux, verify and install the Dell CAB
+   through fwupd.
 
 ## Safety and errors
 
-All initial commands are read-only and need no administrator privileges.
+The scan, status, doctor, check-updates, and plan-only update commands are
+read-only. The Linux apply command needs the privilege model configured for
+fwupd and never invokes `sudo` itself.
 
 The CLI must distinguish these states:
 
@@ -137,8 +149,8 @@ Tests will cover:
 - no-device and partial-device states;
 - vendor metadata failure without a false update result.
 
-The live Mac WD19 will be used as an integration fixture. No firmware write
-will be tested in this phase.
+The live Mac WD19 will be used as an integration fixture. Firmware writes are
+tested only with fake HTTP responses and fake command runners.
 
 ## Success criteria
 
@@ -155,9 +167,13 @@ dockwarden doctor
 or state why the check could not be completed. It must not claim success from
 the USB device descriptor version alone.
 
+`dockwarden update` must print a plan without downloading or writing.
+`dockwarden update --apply` must use the verified Linux CAB and fwupd on Linux,
+and must report unsupported without writing on macOS.
+
 ## Later phases
 
-After the read-only MVP passes, add firmware version reads through the Dell
-HID protocol and Linux `fwupd` integration. Only after that phase will we
-consider a write path, with model matching, component-level comparison,
-external-power checks, logs, recovery guidance, and an explicit confirmation.
+Later phases may add native macOS firmware reads and writes through IOHIDManager
+and the Dell HID/I2C protocol, with hardware-backed recovery tests. They may
+also add component-level comparison, external-power checks, logs, and recovery
+guidance.
