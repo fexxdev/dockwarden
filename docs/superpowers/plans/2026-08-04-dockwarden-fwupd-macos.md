@@ -62,4 +62,4 @@ Homebrew libusb.
 - [x] Run read-only Dockwarden status and plan-only update.
 - [x] Sweep for secret material and firmware write commands.
 - [x] Run `git diff --check`.
-- [ ] Commit and push on `main` without a co-author trailer.
+- [x] Commit and push on `main` without a co-author trailer.
