@@ -1,0 +1,48 @@
++-o Root  <class IORegistryEntry, id 0x100000100>
+  +-o Dell Dock WD19@00150000  <class IOUSBHostDevice, id 0x100037330>
+  | {
+  |   "idProduct" = 45166
+  |   "bcdDevice" = 512
+  |   "USB Product Name" = "Dell Dock WD19"
+  |   "USB Vendor Name" = "Dell Inc."
+  |   "idVendor" = 16700
+  |   "USB Serial Number" = "2000"
+  |   "locationID" = 1376256
+  | }
+  | +-o Dell dock@00152000  <class IOUSBHostDevice, id 0x100037331>
+  | | {
+  | |   "idProduct" = 21639
+  | |   "bcdDevice" = 354
+  | |   "USB Product Name" = "Dell dock"
+  | |   "USB Vendor Name" = "Dell Inc."
+  | |   "idVendor" = 16700
+  | |   "locationID" = 1384448
+  | | }
+  | | +-o USB 10/100/1000 LAN@00152400  <class IOUSBHostDevice, id 0x100037332>
+  | | | {
+  | | |   "idProduct" = 33107
+  | | |   "bcdDevice" = 12561
+  | | |   "USB Product Name" = "USB 10/100/1000 LAN"
+  | | |   "USB Vendor Name" = "Realtek"
+  | | |   "idVendor" = 3034
+  | | |   "USB Serial Number" = "111000001"
+  | | |   "locationID" = 1385472
+  | | | }
+  | | +-o USB Audio@00152500  <class IOUSBHostDevice, id 0x100037333>
+  | |   {
+  | |     "idProduct" = 16430
+  | |     "bcdDevice" = 1
+  | |     "USB Product Name" = "USB Audio"
+  | |     "USB Vendor Name" = "Generic"
+  | |     "idVendor" = 6940
+  | |     "locationID" = 1385728
+  | |   }
+  | +-o Keychron K8@00153000  <class IOUSBHostDevice, id 0x100037334>
+  |   {
+  |     "idProduct" = 591
+  |     "bcdDevice" = 263
+  |     "USB Product Name" = "Keychron K8"
+  |     "USB Vendor Name" = "Keychron K8"
+  |     "idVendor" = 1452
+  |     "locationID" = 1388544
+  |   }
