@@ -9,8 +9,8 @@ candidate only when the page provides a compatible model, version, release
 date, package name, HTTPS Dell download URL, and SHA-256.
 
 Linux `update --apply` downloads the official Dell CAB, verifies its SHA-256,
-and invokes `fwupdmgr local-install`. macOS keeps the metadata check but blocks
-the write path because Dell publishes a Windows executable for that platform.
+and invokes `fwupdmgr local-install`. macOS verifies the same CAB and writes
+supported WD19 components through the native HID/I2C protocol.
 
 Date: 2026-08-04
 
@@ -30,7 +30,8 @@ contains an open source Dell dock plugin for the dock component protocols.
 ## Goal
 
 Build a cross-platform command-line utility named `dockwarden` for macOS and
-Linux. The first version must inspect the connected dock without changing it.
+Linux. Discovery and plan-only commands inspect the dock without changing it.
+The explicit apply command is the only write path.
 
 The first version must:
 
@@ -47,9 +48,10 @@ versions. They must never be labelled or compared as dock firmware versions.
 
 ## Non-goals
 
-The current write path will not execute Dell Windows packages, accept arbitrary
-payloads, force a downgrade, or run on macOS. It will not run a throughput
-test, electrical power test, display signal test, or audio loopback test.
+The write path will not execute Dell Windows packages, accept arbitrary
+payloads, or force a downgrade. The native macOS writer currently refuses a
+newer MST payload. It will not run a throughput test, electrical power test,
+display signal test, or audio loopback test.
 
 It will not distribute Dell firmware blobs. Later update support will use
 official Dell packages and verify their integrity before any write operation.
@@ -93,13 +95,14 @@ workspace and produces one native binary per target without a runtime.
 The command layer will be platform independent. Discovery will use small
 platform adapters:
 
-- macOS: IORegistry data from `ioreg`, with a later native IOKit/HID adapter;
+- macOS: IORegistry data from `ioreg` and native HID access through IOKit;
 - Linux: `sysfs`, `udev`, `lsusb`, and `fwupdmgr` when installed;
 - shared model matching: Dell VID/PID and component identifiers;
 - shared output: typed data converted to text or JSON.
 
-The first adapter may call trusted system tools. Direct USB/HID access is a
-later step, after the read-only model and version checks are verified.
+The discovery adapter may call trusted system tools. The macOS writer uses
+IOHIDManager for vendor-defined HID reports and keeps protocol code separate
+from the platform bridge.
 
 ## Data flow
 
@@ -110,14 +113,15 @@ later step, after the read-only model and version checks are verified.
 5. Collect host-visible service state for Ethernet, audio, and USB children.
 6. Query official Dell metadata for `check-updates` and the `update` plan.
 7. Render the result as text or JSON with stable field names.
-8. With explicit `update --apply` on Linux, verify and install the Dell CAB
-   through fwupd.
+8. With explicit `update --apply`, verify the Dell CAB and use the platform
+   writer: fwupd on Linux or HID/I2C on macOS.
 
 ## Safety and errors
 
 The scan, status, doctor, check-updates, and plan-only update commands are
 read-only. The Linux apply command needs the privilege model configured for
-fwupd and never invokes `sudo` itself.
+fwupd. The macOS apply command requires native HID access. Neither command
+invokes `sudo`.
 
 The CLI must distinguish these states:
 
@@ -169,11 +173,11 @@ the USB device descriptor version alone.
 
 `dockwarden update` must print a plan without downloading or writing.
 `dockwarden update --apply` must use the verified Linux CAB and fwupd on Linux,
-and must report unsupported without writing on macOS.
+and the verified CAB plus native HID/I2C on macOS. It must refuse unsupported
+components before writing any component.
 
 ## Later phases
 
-Later phases may add native macOS firmware reads and writes through IOHIDManager
-and the Dell HID/I2C protocol, with hardware-backed recovery tests. They may
-also add component-level comparison, external-power checks, logs, and recovery
-guidance.
+Later phases may add native MST writes, richer component-level status, external-
+power checks, logs, and recovery guidance. Hardware-backed recovery tests are
+still required before claiming recovery from an interrupted flash.

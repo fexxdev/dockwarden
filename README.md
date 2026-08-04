@@ -13,15 +13,16 @@ The current release can:
 - list dock components and downstream USB devices;
 - report host-visible USB, Ethernet, and audio enumeration;
 - read optional firmware versions from `fwupdmgr` on Linux;
-- check official Dell firmware metadata.
-- prepare a verified Linux firmware update for the WD19;
-- invoke `fwupdmgr` only with explicit `update --apply`.
+- check official Dell firmware metadata;
+- update the WD19 through `fwupdmgr` on Linux;
+- update the WD19 natively through HID on macOS;
+- write firmware only with explicit `update --apply`.
 
 The current release cannot:
 
-- write dock firmware on macOS;
 - execute Dell Windows `.exe` packages;
 - accept arbitrary or forced firmware payloads;
+- update a newer MST firmware through the native macOS writer;
 - test charging power, display output, network throughput, or audio quality.
 
 A USB descriptor version is not a firmware version.
@@ -44,15 +45,19 @@ Run the checks or prepare an update plan:
 ./dockwarden update
 ```
 
-On Linux, apply the verified Dell CAB with an explicit write flag:
+Apply the verified Dell CAB with an explicit write flag:
 
 ```sh
 ./dockwarden update --apply
 ```
 
-The command does not invoke `sudo`. Run it with the privilege model used by
-your fwupd installation. The command downloads the official Dell Linux CAB,
-checks its SHA-256, and calls `fwupdmgr local-install`.
+On Linux, the command checks the SHA-256 and calls `fwupdmgr local-install`.
+It does not invoke `sudo`; use the privilege model configured for fwupd.
+
+On macOS, the command extracts the verified CAB with `bsdtar`, compares the
+EC, hub, MST, and package versions, then writes supported WD19 components over
+the native HID interface. Build the native macOS binary with cgo enabled.
+After a successful update, unplug and reconnect the dock USB-C cable.
 
 Use JSON for automation:
 
@@ -78,12 +83,10 @@ ioreg -p IOUSB -l -w 0
 
 On Linux, it reads `lsusb`. It also probes `fwupdmgr get-devices` when available.
 
-Linux firmware metadata uses Dell driver `4P6VJ`. `update --apply` verifies
-the published CAB checksum before invoking fwupd.
-
-On macOS, the Dell update check reads driver `NKJG6`. The page currently
-publishes a Windows package, so macOS `update --apply` reports unsupported and
-does not download or execute it.
+Firmware metadata uses Dell driver `4P6VJ`, which publishes the Linux CAB for
+the WD19 family. If Dell blocks the dynamic metadata page with HTTP 403,
+dockwarden uses the pinned official CAB and still verifies its SHA-256. The
+Windows `.exe` is never executed.
 
 ## Development
 

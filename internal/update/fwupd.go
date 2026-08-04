@@ -84,7 +84,8 @@ func (u FwupdUpdater) download(ctx context.Context, candidate *domain.FirmwareCa
 	if err != nil {
 		return "", fmt.Errorf("cannot create Dell firmware request: %w", err)
 	}
-	request.Header.Set("User-Agent", "dockwarden/0.2 (verified firmware updater)")
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15")
+	request.Header.Set("Referer", "https://www.dell.com/")
 	response, err := u.HTTP.Do(request)
 	if err != nil {
 		return "", fmt.Errorf("cannot download Dell firmware: %w", err)

@@ -127,3 +127,34 @@ func TestCatalogCheckHandlesNetworkFailure(t *testing.T) {
 		t.Fatalf("unexpected failure result: %+v", result)
 	}
 }
+
+func TestCatalogCheckUsesPinnedCandidateOnDellForbidden(t *testing.T) {
+	pinned := domain.FirmwareCandidate{
+		PackageName:      "DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.04.cab",
+		DownloadURL:      "https://dl.dell.com/FOLDER13269632M/1/DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.04.cab",
+		Version:          "01.01.00.01, 01.01.04.01",
+		ReleaseDate:      "24 Jun 2025",
+		SHA256:           "c91038ac643aabc03ca2a020363af872f74aca2af92f66ee846b1a29cdf13d6d",
+		Format:           "CAB",
+		CompatibleModels: []string{"Dell Dock WD19"},
+	}
+	client := CatalogClient{
+		HTTP: &fakeHTTPDoer{response: &http.Response{
+			StatusCode: http.StatusForbidden,
+			Body:       io.NopCloser(strings.NewReader("blocked")),
+		}},
+		Sources: map[string]string{
+			"Dell Dock WD19": wd19SourceURL,
+		},
+		Fallbacks: map[string]domain.FirmwareCandidate{
+			"Dell Dock WD19": pinned,
+		},
+	}
+	result := client.Check(context.Background(), &domain.Dock{Model: "Dell Dock WD19"})
+	if result.State != "update_available" || result.Candidate == nil || result.Candidate.DownloadURL != pinned.DownloadURL {
+		t.Fatalf("unexpected pinned result: %+v", result)
+	}
+	if !strings.Contains(result.Reason, "pinned") {
+		t.Fatalf("fallback reason is not explicit: %s", result.Reason)
+	}
+}

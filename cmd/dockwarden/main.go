@@ -12,11 +12,12 @@ import (
 	"github.com/fexxdev/dockwarden/internal/cli"
 	"github.com/fexxdev/dockwarden/internal/dell"
 	"github.com/fexxdev/dockwarden/internal/discovery"
+	"github.com/fexxdev/dockwarden/internal/domain"
+	"github.com/fexxdev/dockwarden/internal/macos/hid"
 	"github.com/fexxdev/dockwarden/internal/update"
 )
 
-const version = "0.2.0-dev"
-const wd19MacDriverURL = "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=nkjg6"
+const version = "0.3.0-dev"
 const wd19LinuxDriverURL = "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=4p6vj"
 
 func main() {
@@ -40,10 +41,17 @@ func main() {
 		Err: os.Stderr,
 	}
 	httpClient := &http.Client{Timeout: 15 * time.Second}
-	driverURL := wd19MacDriverURL
+	driverURL := wd19LinuxDriverURL
 	switch runtime.GOOS {
 	case "darwin":
 		dependencies.Inspector = discovery.MacInspector{}
+		dependencies.Updater = update.MacUpdater{
+			HTTP: httpClient,
+			Open: func(productID uint16) (update.HIDConnection, error) {
+				return hid.Open(productID)
+			},
+		}
+		driverURL = wd19LinuxDriverURL
 	case "linux":
 		dependencies.Inspector = discovery.LinuxInspector{}
 		dependencies.Updater = update.FwupdUpdater{HTTP: httpClient}
@@ -56,6 +64,9 @@ func main() {
 		HTTP: httpClient,
 		Sources: map[string]string{
 			"Dell Dock WD19": driverURL,
+		},
+		Fallbacks: map[string]domain.FirmwareCandidate{
+			"Dell Dock WD19": dell.PinnedWD19LinuxCandidate(),
 		},
 	}
 

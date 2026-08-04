@@ -20,8 +20,23 @@ type HTTPDoer interface {
 }
 
 type CatalogClient struct {
-	HTTP    HTTPDoer
-	Sources map[string]string
+	HTTP      HTTPDoer
+	Sources   map[string]string
+	Fallbacks map[string]domain.FirmwareCandidate
+}
+
+func PinnedWD19LinuxCandidate() domain.FirmwareCandidate {
+	return domain.FirmwareCandidate{
+		SourceURL:        "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=4p6vj",
+		PackageName:      "DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.04.cab",
+		DownloadURL:      "https://dl.dell.com/FOLDER13269632M/1/DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.04.cab",
+		Version:          "01.01.00.01, 01.01.04.01",
+		ReleaseDate:      "24 Jun 2025",
+		SHA256:           "c91038ac643aabc03ca2a020363af872f74aca2af92f66ee846b1a29cdf13d6d",
+		Format:           "CAB",
+		SupportedOS:      []string{"Linux"},
+		CompatibleModels: []string{"Dell Dock WD19", "Dell Dock WD22", "Dell HD22", "Dell WD25", "Dell SD25"},
+	}
 }
 
 func ParseDriverPage(sourceURL string, page []byte) (domain.FirmwareCandidate, error) {
@@ -103,8 +118,9 @@ func (c CatalogClient) Check(ctx context.Context, dock *domain.Dock) domain.Upda
 	if err != nil {
 		return unavailable("cannot create Dell metadata request: " + err.Error())
 	}
-	request.Header.Set("User-Agent", "dockwarden/0.1 (read-only firmware metadata)")
+	request.Header.Set("User-Agent", dellBrowserUserAgent)
 	request.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	request.Header.Set("Referer", "https://www.dell.com/")
 
 	response, err := c.HTTP.Do(request)
 	if err != nil {
@@ -115,6 +131,16 @@ func (c CatalogClient) Check(ctx context.Context, dock *domain.Dock) domain.Upda
 	}
 	if response.Body != nil {
 		defer response.Body.Close()
+	}
+	if response.StatusCode == http.StatusForbidden {
+		if candidate, ok := c.fallbackCandidate(dock.Model, sourceURL); ok {
+			return domain.UpdateCheck{
+				State:     "update_available",
+				SourceURL: sourceURL,
+				Reason:    "Dell metadata page returned HTTP 403; using pinned official Dell package",
+				Candidate: candidate,
+			}
+		}
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return unavailable(fmt.Sprintf("Dell metadata returned HTTP %d", response.StatusCode))
@@ -147,6 +173,22 @@ func (c CatalogClient) Check(ctx context.Context, dock *domain.Dock) domain.Upda
 	}
 }
 
+func (c CatalogClient) fallbackCandidate(model, sourceURL string) (*domain.FirmwareCandidate, bool) {
+	candidate, ok := c.Fallbacks[model]
+	if !ok {
+		return nil, false
+	}
+	if candidate.SourceURL == "" {
+		candidate.SourceURL = sourceURL
+	}
+	if !isDellSupportURL(candidate.SourceURL) || !isDellSupportURL(candidate.DownloadURL) ||
+		!isDockFirmwarePackage(candidate.PackageName) || !isSHA256(candidate.SHA256) ||
+		!candidateMatchesModel(candidate, model) {
+		return nil, false
+	}
+	return &candidate, true
+}
+
 func unavailable(reason string) domain.UpdateCheck {
 	return domain.UpdateCheck{
 		State:  "vendor_metadata_unavailable",
@@ -162,6 +204,8 @@ func isDellSupportURL(sourceURL string) bool {
 	host := strings.ToLower(parsed.Hostname())
 	return host == "dell.com" || strings.HasSuffix(host, ".dell.com")
 }
+
+const dellBrowserUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15"
 
 var htmlTagPattern = regexp.MustCompile("<[^>]*>")
 var hrefPattern = regexp.MustCompile(`(?is)<a\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>`)

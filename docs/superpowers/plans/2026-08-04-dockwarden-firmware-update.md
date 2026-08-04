@@ -2,12 +2,12 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add a guarded Linux firmware update command for the Dell Dock WD19.
+**Goal:** Add a guarded cross-platform firmware update command for the Dell Dock WD19.
 
 **Architecture:** The CLI builds a read-only update plan through the existing
-Dell catalog client. With `--apply`, a separate fwupd backend downloads and
-hash-checks the official Linux CAB, then invokes `fwupdmgr local-install`.
-macOS has no write backend and returns a clear unsupported result.
+Dell catalog client. With `--apply`, Linux downloads and hash-checks the
+official CAB, then invokes `fwupdmgr local-install`. macOS uses the verified
+CAB and the native Dell HID/I2C protocol.
 
 **Tech Stack:** Go standard library, Dell HTTPS metadata, `fwupdmgr` on Linux.
 
@@ -108,11 +108,10 @@ macOS has no write backend and returns a clear unsupported result.
 - Modify: `docs/superpowers/specs/2026-08-04-dockwarden-design.md`
 
 **Interfaces:**
-- Linux uses Dell driver `4p6vj` for the CAB candidate.
-- macOS keeps Dell driver `nkjg6` for metadata and has no updater backend.
+- Both platforms use Dell driver `4p6vj` for the CAB candidate.
+- Linux instantiates `FwupdUpdater`; macOS instantiates the native HID updater.
 
-- [ ] Add the Linux and macOS source URLs and instantiate `FwupdUpdater`
-  only on Linux.
+- [ ] Add the shared CAB source and instantiate the platform-specific updater.
 - [ ] Update README usage, supported platforms, safety rules, and result
   states.
 - [ ] Update the original read-only spec so its current implementation and
