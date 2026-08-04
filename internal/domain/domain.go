@@ -62,6 +62,7 @@ type Check struct {
 type FirmwareCandidate struct {
 	SourceURL        string   `json:"source_url"`
 	PackageName      string   `json:"package_name"`
+	DownloadURL      string   `json:"download_url"`
 	Version          string   `json:"version"`
 	ReleaseDate      string   `json:"release_date"`
 	SHA256           string   `json:"sha256"`

@@ -43,7 +43,8 @@ func TestParseDriverPage(t *testing.T) {
 	}
 	if candidate.PackageName != "DellDock_WD19_WD22_FW_01.00.36.exe" ||
 		candidate.Version != "01.00.36" ||
-		candidate.ReleaseDate != "15 Apr 2026" {
+		candidate.ReleaseDate != "15 Apr 2026" ||
+		candidate.DownloadURL != "https://dl.dell.com/DellDock_WD19_WD22_FW_01.00.36.exe" {
 		t.Fatalf("unexpected candidate identity: %+v", candidate)
 	}
 	if candidate.SHA256 != "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" {
@@ -63,7 +64,7 @@ func TestParseDriverPageRequiresHash(t *testing.T) {
 }
 
 func TestParseDriverPageHandlesComponentVersionsAndLists(t *testing.T) {
-	page := []byte("<div>Version : 01.01.03.01, 01.01.14.01</div><div>Release Date : 30 Apr 2026</div><div>File Name : DellDockFirmwarePackage_WD19_WD22_01.01.14.exe</div><div>SHA-256 : 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef</div><h2>Compatible Systems</h2><a>Dell 14 D14260</a><a>Dell Dock WD19</a><h2>Supported Operating Systems</h2><p>Windows 11</p>")
+	page := []byte("<div>Version : 01.01.03.01, 01.01.14.01</div><div>Release Date : 30 Apr 2026</div><div>File Name : DellDockFirmwarePackage_WD19_WD22_01.01.14.exe</div><div>SHA-256 : 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef</div><h2>Compatible Systems</h2><a>Dell 14 D14260</a><a>Dell Dock WD19</a><h2>Supported Operating Systems</h2><p>Windows 11</p><a href=\"https://dl.dell.com/DellDockFirmwarePackage_WD19_WD22_01.01.14.exe\">download</a>")
 	candidate, err := ParseDriverPage(wd19SourceURL, page)
 	if err != nil {
 		t.Fatal(err)
@@ -79,6 +80,13 @@ func TestParseDriverPageHandlesComponentVersionsAndLists(t *testing.T) {
 	}
 	if !foundWD19 {
 		t.Fatalf("WD19 compatibility was lost: %+v", candidate)
+	}
+}
+
+func TestParseDriverPageRejectsUnsafeDownloadURL(t *testing.T) {
+	page := []byte(`<div>Version: 01.00.36</div><div>Release Date: 15 Apr 2026</div><div>File Name: DellDock_WD19_FW.exe</div><div>SHA-256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef</div><div>Compatible Systems: Dell Dock WD19</div><a href="http://example.com/DellDock_WD19_FW.exe">download</a>`)
+	if _, err := ParseDriverPage(wd19SourceURL, page); err == nil {
+		t.Fatal("expected unsafe download URL error")
 	}
 }
 

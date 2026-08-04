@@ -47,6 +47,10 @@ func ParseDriverPage(sourceURL string, page []byte) (domain.FirmwareCandidate, e
 	if packageName == "" || !isDockFirmwarePackage(packageName) {
 		return domain.FirmwareCandidate{}, fmt.Errorf("page has no compatible Dell dock firmware package")
 	}
+	downloadURL, err := downloadURLForPackage(page, packageName)
+	if err != nil {
+		return domain.FirmwareCandidate{}, err
+	}
 	if !isSimpleVersion(version) {
 		return domain.FirmwareCandidate{}, fmt.Errorf("page has no usable firmware version")
 	}
@@ -67,6 +71,7 @@ func ParseDriverPage(sourceURL string, page []byte) (domain.FirmwareCandidate, e
 	return domain.FirmwareCandidate{
 		SourceURL:        sourceURL,
 		PackageName:      packageName,
+		DownloadURL:      downloadURL,
 		Version:          version,
 		ReleaseDate:      releaseDate,
 		SHA256:           strings.ToLower(checksum),
@@ -159,6 +164,7 @@ func isDellSupportURL(sourceURL string) bool {
 }
 
 var htmlTagPattern = regexp.MustCompile("<[^>]*>")
+var hrefPattern = regexp.MustCompile(`(?is)<a\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>`)
 
 func normalizeHTML(page []byte) string {
 	text := htmlTagPattern.ReplaceAllString(string(page), "\n")
@@ -231,6 +237,23 @@ func isSimpleVersion(value string) bool {
 
 func isSHA256(value string) bool {
 	return sha256Pattern.MatchString(strings.TrimSpace(value))
+}
+
+func downloadURLForPackage(page []byte, packageName string) (string, error) {
+	for _, matches := range hrefPattern.FindAllStringSubmatch(string(page), -1) {
+		if len(matches) != 2 {
+			continue
+		}
+		href := strings.TrimSpace(html.UnescapeString(matches[1]))
+		if !strings.Contains(strings.ToLower(href), strings.ToLower(packageName)) {
+			continue
+		}
+		if !isDellSupportURL(href) {
+			return "", fmt.Errorf("page has an unsafe Dell firmware download URL")
+		}
+		return href, nil
+	}
+	return "", fmt.Errorf("page has no download URL for %s", packageName)
 }
 
 func metadataField(text string, labels, stops []string) string {
