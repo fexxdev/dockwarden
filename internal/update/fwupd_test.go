@@ -216,6 +216,25 @@ func TestFwupdUpdaterReportsFwupdFailure(t *testing.T) {
 	}
 }
 
+func TestSystemRunnerRunWithEnvDoesNotInheritProcessEnvironment(t *testing.T) {
+	t.Setenv("FWUPD_SELF_TEST", "unsafe")
+	t.Setenv("DYLD_LIBRARY_PATH", "/tmp/unsafe")
+	output, err := (systemRunner{}).RunWithEnv(context.Background(), []string{
+		"PATH=/usr/bin:/bin",
+		"LANG=C",
+	}, "/usr/bin/env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(output)
+	if strings.Contains(text, "FWUPD_SELF_TEST=") || strings.Contains(text, "DYLD_LIBRARY_PATH=") {
+		t.Fatalf("unsafe environment was inherited: %s", text)
+	}
+	if !strings.Contains(text, "PATH=/usr/bin:/bin") || !strings.Contains(text, "LANG=C") {
+		t.Fatalf("explicit environment is missing: %s", text)
+	}
+}
+
 func candidatePtr(candidate domain.FirmwareCandidate) *domain.FirmwareCandidate {
 	return &candidate
 }

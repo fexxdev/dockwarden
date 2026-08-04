@@ -50,7 +50,7 @@ func TestBsdtarExtractorReadsRootCABMember(t *testing.T) {
 	if string(got) != "member" {
 		t.Fatalf("extracted member = %q, want %q", got, "member")
 	}
-	if len(runner.calls) != 1 || len(runner.calls[0]) != 4 || runner.calls[0][0] != "bsdtar" || runner.calls[0][1] != "-xOf" || runner.calls[0][2] != "firmware.cab" || runner.calls[0][3] != "ec.bin" {
+	if len(runner.calls) != 1 || len(runner.calls[0]) != 4 || runner.calls[0][0] != "/usr/bin/bsdtar" || runner.calls[0][1] != "-xOf" || runner.calls[0][2] != "firmware.cab" || runner.calls[0][3] != "ec.bin" {
 		t.Fatalf("unexpected bsdtar call: %v", runner.calls)
 	}
 }
@@ -85,6 +85,74 @@ func TestHIDTargetForProductRejectsAmbiguousTopology(t *testing.T) {
 	if _, err := hidTargetForProduct(dock, wd19Gen1ProductID); err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("expected ambiguous HID target rejection, got %v", err)
 	}
+}
+
+func TestMacPreflightReadsSafeWD19WithoutWrites(t *testing.T) {
+	connection := &fakeHIDConnection{
+		fakeHIDReportDevice: fakeHIDReportDevice{inputs: wd19ReadOnlyInputs()},
+	}
+	result, err := (MacPreflightReader{
+		Open:      func(domain.HIDTarget) (HIDConnection, error) { return connection, nil },
+		Extractor: &fakeFirmwareExtractor{blobs: wd19FirmwareBlobs()},
+	}).Check(context.Background(), matchingDock(), "firmware.cab")
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if result.ServiceTag != "TST0001" || result.ModuleSerial != 2000 || !result.UpdateAvailable {
+		t.Fatalf("unexpected preflight result: %+v", result)
+	}
+	if !connection.closed {
+		t.Fatal("preflight did not close the HID connection")
+	}
+	assertNoFirmwareWrites(t, connection.outputs)
+}
+
+func TestMacPreflightRejectsUnsafeAndPendingWD19WithoutWrites(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		inputs [][]byte
+	}{
+		{name: "unsafe board", inputs: wd19ReadOnlyInputsFor(5, 180, "01.01.00.13")},
+		{name: "pending update", inputs: func() [][]byte {
+			inputs := wd19ReadOnlyInputs()
+			inputs[2][1] = firmwareUpdatePending
+			return inputs
+		}()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			connection := &fakeHIDConnection{
+				fakeHIDReportDevice: fakeHIDReportDevice{inputs: test.inputs},
+			}
+			_, err := (MacPreflightReader{
+				Open:      func(domain.HIDTarget) (HIDConnection, error) { return connection, nil },
+				Extractor: &fakeFirmwareExtractor{blobs: wd19FirmwareBlobs()},
+			}).Check(context.Background(), matchingDock(), "firmware.cab")
+			if err == nil {
+				t.Fatal("unsafe preflight was accepted")
+			}
+			assertNoFirmwareWrites(t, connection.outputs)
+		})
+	}
+}
+
+func TestMacPreflightReportsNoUpdateWithoutWrites(t *testing.T) {
+	blobs := wd19FirmwareBlobs()
+	copy(blobs["ec.bin"][ecBlobVersionOffset:], "01.01.00.13")
+	copy(blobs["salomon_package.bin"][0x14:], []byte{0x01, 0x00, 0x47, 0x01})
+	connection := &fakeHIDConnection{
+		fakeHIDReportDevice: fakeHIDReportDevice{inputs: wd19ReadOnlyInputs()},
+	}
+	result, err := (MacPreflightReader{
+		Open:      func(domain.HIDTarget) (HIDConnection, error) { return connection, nil },
+		Extractor: &fakeFirmwareExtractor{blobs: blobs},
+	}).Check(context.Background(), matchingDock(), "firmware.cab")
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if result.UpdateAvailable {
+		t.Fatalf("preflight reported an update for equal versions: %+v", result)
+	}
+	assertNoFirmwareWrites(t, connection.outputs)
 }
 
 func TestMacUpdaterRejectsUnsafePreflight(t *testing.T) {
@@ -353,7 +421,8 @@ func wd19ReadOnlyInputs() [][]byte {
 	binary.LittleEndian.PutUint16(dockData[4:6], 4)
 	binary.LittleEndian.PutUint16(dockData[6:8], 6)
 	binary.LittleEndian.PutUint32(dockData[12:16], 0x01470001)
-	copy(dockData[32:39], "5YVWRV2")
+	binary.LittleEndian.PutUint64(dockData[16:24], 2000)
+	copy(dockData[32:39], "TST0001")
 	copy(dockData[39:103], "WD19")
 
 	info := make([]byte, dockInfoSize)
@@ -373,6 +442,19 @@ func wd19ReadOnlyInputs() [][]byte {
 		append([]byte{byte(len(info))}, info...),
 		{1, 1},
 		{0, 0},
+	}
+}
+
+func assertNoFirmwareWrites(t *testing.T, reports [][]byte) {
+	t.Helper()
+	for _, report := range reports {
+		if len(report) > 1 && (report[1] == hidExtensionI2CWrite ||
+			report[1] == hidExtensionWriteFlash ||
+			report[1] == hidExtensionErase ||
+			report[1] == hidExtensionClock ||
+			report[1] == hidExtensionVerify) {
+			t.Fatalf("read-only preflight wrote HID report: %x", report)
+		}
 	}
 }
 

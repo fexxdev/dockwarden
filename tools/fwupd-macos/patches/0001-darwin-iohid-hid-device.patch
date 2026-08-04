@@ -425,3 +425,135 @@ index 23d5828..9cc1892 100644
  
  if valgrind.found()
 
+diff --git a/plugins/dell-dock/fu-dell-dock-ec.c b/plugins/dell-dock/fu-dell-dock-ec.c
+--- a/plugins/dell-dock/fu-dell-dock-ec.c
++++ b/plugins/dell-dock/fu-dell-dock-ec.c
+@@ -573,6 +573,44 @@ fu_dell_dock_ec_get_dock_data(FuDellDockEc *self, GError **error)
+ 	return TRUE;
+ }
+ 
++gboolean
++fu_dell_dock_ec_verify_serial(FuDellDockEc *self, const gchar *expected, GError **error)
++{
++	g_autoptr(FuDeviceLocker) locker = NULL;
++	const gchar *actual;
++
++	if (expected == NULL || expected[0] == '\0') {
++		g_set_error_literal(error,
++				    FWUPD_ERROR,
++				    FWUPD_ERROR_NOT_SUPPORTED,
++				    "expected Dell dock serial is empty");
++		return FALSE;
++	}
++	locker = fu_device_locker_new(FU_DEVICE(self), error);
++	if (locker == NULL)
++		return FALSE;
++	if (!fu_dell_dock_ec_get_dock_data(self, error))
++		return FALSE;
++	actual = fu_device_get_serial(FU_DEVICE(self));
++	if (actual == NULL || actual[0] == '\0') {
++		g_set_error_literal(error,
++				    FWUPD_ERROR,
++				    FWUPD_ERROR_NOT_SUPPORTED,
++				    "Dell dock serial is unavailable before write");
++		return FALSE;
++	}
++	if (g_strcmp0(actual, expected) != 0) {
++		g_set_error(error,
++			    FWUPD_ERROR,
++			    FWUPD_ERROR_NOT_SUPPORTED,
++			    "Dell dock serial changed before write: expected %s, got %s",
++			    expected,
++			    actual);
++		return FALSE;
++	}
++	return TRUE;
++}
++
+ static void
+ fu_dell_dock_ec_to_string(FuDevice *device, guint idt, GString *str)
+ {
+diff --git a/plugins/dell-dock/fu-dell-dock-ec.h b/plugins/dell-dock/fu-dell-dock-ec.h
+--- a/plugins/dell-dock/fu-dell-dock-ec.h
++++ b/plugins/dell-dock/fu-dell-dock-ec.h
+@@ -47,3 +47,5 @@ gboolean
+ fu_dell_dock_ec_module_is_usb4(FuDellDockEc *self);
+ guint8
+ fu_dell_dock_ec_get_dock_type(FuDellDockEc *self);
++gboolean
++fu_dell_dock_ec_verify_serial(FuDellDockEc *self, const gchar *expected, GError **error);
+diff --git a/plugins/dell-dock/fu-dell-dock-plugin.c b/plugins/dell-dock/fu-dell-dock-plugin.c
+--- a/plugins/dell-dock/fu-dell-dock-plugin.c
++++ b/plugins/dell-dock/fu-dell-dock-plugin.c
+@@ -256,8 +256,70 @@ fu_dell_dock_plugin_device_removed(FuPlugin *plugin, FuDevice *device)
+ static gboolean
+ fu_dell_dock_plugin_composite_prepare(FuPlugin *plugin, GPtrArray *devices, GError **error)
+ {
+-	FuDellDockEc *parent = fu_dell_dock_plugin_get_ec(devices);
++	const gchar *expected_serial = g_getenv("DOCKWARDEN_EXPECTED_DELL_DOCK_SERIAL");
++	FuDellDockEc *parent = NULL;
+ 	const gchar *sku;
++
++	if (expected_serial != NULL) {
++		const gchar *composite_id = NULL;
++		GPtrArray *plugin_devices = fu_plugin_get_devices(plugin);
++		guint matches = 0;
++
++		if (expected_serial[0] == '\0') {
++			g_set_error_literal(error,
++					    FWUPD_ERROR,
++					    FWUPD_ERROR_NOT_SUPPORTED,
++					    "expected Dell dock serial is empty");
++			return FALSE;
++		}
++		for (guint i = 0; i < devices->len; i++) {
++			FuDevice *device = g_ptr_array_index(devices, i);
++			const gchar *device_composite_id = fu_device_get_composite_id(device);
++			if (device_composite_id == NULL) {
++				g_set_error_literal(error,
++						    FWUPD_ERROR,
++						    FWUPD_ERROR_NOT_SUPPORTED,
++						    "Dell dock transaction has no composite ID");
++				return FALSE;
++			}
++			if (composite_id == NULL)
++				composite_id = device_composite_id;
++			else if (g_strcmp0(composite_id, device_composite_id) != 0) {
++				g_set_error_literal(error,
++						    FWUPD_ERROR,
++						    FWUPD_ERROR_NOT_SUPPORTED,
++						    "Dell dock transaction has multiple composite IDs");
++				return FALSE;
++			}
++		}
++		if (composite_id == NULL) {
++			g_set_error_literal(error,
++					    FWUPD_ERROR,
++					    FWUPD_ERROR_NOT_SUPPORTED,
++					    "Dell dock transaction is empty");
++			return FALSE;
++		}
++		for (guint i = 0; i < plugin_devices->len; i++) {
++			FuDevice *device = g_ptr_array_index(plugin_devices, i);
++			if (!FU_IS_DELL_DOCK_EC(device) ||
++			    g_strcmp0(composite_id, fu_device_get_composite_id(device)) != 0)
++				continue;
++			parent = FU_DELL_DOCK_EC(device);
++			matches++;
++		}
++		if (matches != 1) {
++			g_set_error(error,
++				    FWUPD_ERROR,
++				    FWUPD_ERROR_NOT_SUPPORTED,
++				    "expected one Dell dock EC before write, got %u",
++				    matches);
++			return FALSE;
++		}
++		if (!fu_dell_dock_ec_verify_serial(parent, expected_serial, error))
++			return FALSE;
++	} else {
++		parent = fu_dell_dock_plugin_get_ec(devices);
++	}
+ 	if (parent == NULL)
+ 		return TRUE;
+ 	sku = fu_dell_dock_ec_get_module_type(parent);

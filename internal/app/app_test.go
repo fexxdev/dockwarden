@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/fexxdev/dockwarden/internal/cli"
@@ -31,6 +32,17 @@ type fakeFirmwareUpdater struct {
 	dock      *domain.Dock
 	candidate *domain.FirmwareCandidate
 	result    domain.UpdateCheck
+}
+
+type fakeReadyFirmwareUpdater struct {
+	fakeFirmwareUpdater
+	readyCalls int
+	readyErr   error
+}
+
+func (f *fakeReadyFirmwareUpdater) CheckReady(context.Context) error {
+	f.readyCalls++
+	return f.readyErr
 }
 
 func (f *fakeFirmwareUpdater) Apply(_ context.Context, dock *domain.Dock, candidate *domain.FirmwareCandidate) domain.UpdateCheck {
@@ -210,6 +222,34 @@ func TestRunUpdateStagesOnlyWithApply(t *testing.T) {
 	}
 }
 
+func TestRunUpdateApplyAttestsWriterBeforeCatalogNetwork(t *testing.T) {
+	inspector := &fakeInspector{report: detectedReport()}
+	updates := &fakeUpdateChecker{result: domain.UpdateCheck{State: "update_available"}}
+	updater := &fakeReadyFirmwareUpdater{readyErr: errors.New("managed writer is not trusted")}
+	var out bytes.Buffer
+	code := Run(context.Background(), cli.Options{
+		Command: "update",
+		Apply:   true,
+		JSON:    true,
+	}, Dependencies{
+		Inspector: inspector,
+		Updates:   updates,
+		Updater:   updater,
+		Out:       &out,
+		Err:       &bytes.Buffer{},
+	})
+	if code != 2 || updater.readyCalls != 1 || updates.calls != 0 || updater.calls != 0 {
+		t.Fatalf("writer readiness did not stop before catalog: code=%d ready=%d catalog=%d apply=%d", code, updater.readyCalls, updates.calls, updater.calls)
+	}
+	var report domain.Report
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Update == nil || report.Update.State != "update_failed" || report.Update.Reason != "managed writer is not trusted" {
+		t.Fatalf("unexpected readiness result: %+v", report.Update)
+	}
+}
+
 func TestRunUpdateReportsUnsupportedWithoutBackend(t *testing.T) {
 	inspector := &fakeInspector{report: detectedReport()}
 	updates := &fakeUpdateChecker{result: domain.UpdateCheck{
@@ -237,5 +277,29 @@ func TestRunUpdateReportsUnsupportedWithoutBackend(t *testing.T) {
 	}
 	if report.Update == nil || report.Update.State != "unsupported" {
 		t.Fatalf("unexpected unsupported result: %+v", report.Update)
+	}
+}
+
+func TestRunUpdateApplyRejectsUnavailableVersionCheck(t *testing.T) {
+	inspector := &fakeInspector{report: detectedReport()}
+	updates := &fakeUpdateChecker{result: domain.UpdateCheck{
+		State:  "version_check_unavailable",
+		Reason: "detected dock has no mst version",
+	}}
+	updater := &fakeFirmwareUpdater{}
+	var out bytes.Buffer
+	code := Run(context.Background(), cli.Options{
+		Command: "update",
+		Apply:   true,
+		JSON:    true,
+	}, Dependencies{
+		Inspector: inspector,
+		Updates:   updates,
+		Updater:   updater,
+		Out:       &out,
+		Err:       &bytes.Buffer{},
+	})
+	if code != 2 || updater.calls != 0 {
+		t.Fatalf("expected unavailable version check to stop apply, code=%d updater_calls=%d", code, updater.calls)
 	}
 }

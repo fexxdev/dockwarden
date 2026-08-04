@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/fexxdev/dockwarden/internal/domain"
+	"github.com/fexxdev/dockwarden/internal/firmwareversion"
 )
 
 const maxDriverPageBytes = 4 * 1024 * 1024
@@ -36,6 +37,13 @@ func PinnedWD19LinuxCandidate() domain.FirmwareCandidate {
 		Format:           "CAB",
 		SupportedOS:      []string{"Linux"},
 		CompatibleModels: []string{"Dell Dock WD19", "Dell Dock WD22", "Dell HD22", "Dell WD25", "Dell SD25"},
+		ComponentVersions: map[string]string{
+			domain.FirmwareComponentPackage:            "01.01.01.01",
+			domain.FirmwareComponentEmbeddedController: "01.01.00.15",
+			domain.FirmwareComponentUSBHubGen1:         "01.23",
+			domain.FirmwareComponentUSBHubGen2:         "01.62",
+			domain.FirmwareComponentMST:                "05.07.08",
+		},
 	}
 }
 
@@ -140,12 +148,7 @@ func (c CatalogClient) Check(ctx context.Context, dock *domain.Dock) domain.Upda
 	}
 	if response.StatusCode == http.StatusForbidden {
 		if candidate, ok := c.fallbackCandidate(dock.Model, sourceURL); ok {
-			return domain.UpdateCheck{
-				State:     "update_available",
-				SourceURL: sourceURL,
-				Reason:    "Dell metadata page returned HTTP 403; using pinned official Dell package",
-				Candidate: candidate,
-			}
+			return c.checkComponentVersions(dock, sourceURL, candidate, "Dell metadata page returned HTTP 403; using pinned official Dell package")
 		}
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
@@ -170,13 +173,10 @@ func (c CatalogClient) Check(ctx context.Context, dock *domain.Dock) domain.Upda
 	if !candidateMatchesModel(candidate, dock.Model) {
 		return unavailable("Dell metadata does not list the detected dock model")
 	}
-
-	return domain.UpdateCheck{
-		State:     "update_available",
-		SourceURL: sourceURL,
-		Reason:    "compatible Dell package found; current dock firmware was not read",
-		Candidate: &candidate,
+	if err := c.inheritPinnedComponentVersions(dock.Model, &candidate); err != nil {
+		return versionCheckUnavailable(sourceURL, &candidate, err.Error())
 	}
+	return c.checkComponentVersions(dock, sourceURL, &candidate, "compatible Dell package found")
 }
 
 func (c CatalogClient) fallbackCandidate(model, sourceURL string) (*domain.FirmwareCandidate, bool) {
@@ -202,6 +202,122 @@ func unavailable(reason string) domain.UpdateCheck {
 		State:  "vendor_metadata_unavailable",
 		Reason: reason,
 	}
+}
+
+func (c CatalogClient) inheritPinnedComponentVersions(model string, candidate *domain.FirmwareCandidate) error {
+	if candidate == nil {
+		return fmt.Errorf("Dell metadata has no firmware candidate")
+	}
+	pinned, ok := c.fallbackCandidate(model, candidate.SourceURL)
+	if !ok {
+		return fmt.Errorf("no verified pinned component versions are configured for %s", model)
+	}
+	if !strings.EqualFold(candidate.SHA256, pinned.SHA256) {
+		return fmt.Errorf("Dell candidate SHA-256 does not match the pinned WD19 component versions")
+	}
+	candidate.ComponentVersions = cloneComponentVersions(pinned.ComponentVersions)
+	return nil
+}
+
+func (c CatalogClient) checkComponentVersions(dock *domain.Dock, sourceURL string, candidate *domain.FirmwareCandidate, reason string) domain.UpdateCheck {
+	if dock == nil || candidate == nil {
+		return versionCheckUnavailable(sourceURL, candidate, "firmware candidate or detected dock is missing")
+	}
+	currentVersions, err := wd19CurrentComponentVersions(dock.Firmware)
+	if err != nil {
+		return versionCheckUnavailable(sourceURL, candidate, err.Error())
+	}
+	for component := range candidate.ComponentVersions {
+		if !isWD19Component(component) {
+			return versionCheckUnavailable(sourceURL, candidate, "candidate has unsupported component "+component)
+		}
+	}
+	updateAvailable := false
+	for _, component := range wd19ComponentNames {
+		candidateVersion, ok := candidate.ComponentVersions[component]
+		if !ok || strings.TrimSpace(candidateVersion) == "" {
+			return versionCheckUnavailable(sourceURL, candidate, "candidate has no "+component+" version")
+		}
+		comparison, compareErr := firmwareversion.Compare(candidateVersion, currentVersions[component])
+		if compareErr != nil {
+			return versionCheckUnavailable(sourceURL, candidate, "cannot compare "+component+" versions: "+compareErr.Error())
+		}
+		if comparison > 0 {
+			updateAvailable = true
+		}
+	}
+	if updateAvailable {
+		return domain.UpdateCheck{
+			State:     "update_available",
+			SourceURL: sourceURL,
+			Reason:    reason,
+			Candidate: candidate,
+		}
+	}
+	return domain.UpdateCheck{
+		State:     "up_to_date",
+		SourceURL: sourceURL,
+		Reason:    "verified Dell CAB contains no component newer than the detected WD19 firmware",
+		Candidate: candidate,
+	}
+}
+
+func versionCheckUnavailable(sourceURL string, candidate *domain.FirmwareCandidate, reason string) domain.UpdateCheck {
+	return domain.UpdateCheck{
+		State:     "version_check_unavailable",
+		SourceURL: sourceURL,
+		Reason:    reason,
+		Candidate: candidate,
+	}
+}
+
+var wd19ComponentNames = []string{
+	domain.FirmwareComponentPackage,
+	domain.FirmwareComponentEmbeddedController,
+	domain.FirmwareComponentUSBHubGen1,
+	domain.FirmwareComponentUSBHubGen2,
+	domain.FirmwareComponentMST,
+}
+
+func wd19CurrentComponentVersions(observations []domain.FirmwareObservation) (map[string]string, error) {
+	current := make(map[string]string, len(wd19ComponentNames))
+	for _, observation := range observations {
+		component := strings.TrimSpace(observation.Component)
+		if !isWD19Component(component) {
+			continue
+		}
+		version := strings.TrimSpace(observation.Version)
+		if version == "" {
+			return nil, fmt.Errorf("detected %s version is missing", component)
+		}
+		if previous, exists := current[component]; exists && previous != version {
+			return nil, fmt.Errorf("detected %s has conflicting versions %s and %s", component, previous, version)
+		}
+		current[component] = version
+	}
+	for _, component := range wd19ComponentNames {
+		if current[component] == "" {
+			return nil, fmt.Errorf("detected dock has no %s version", component)
+		}
+	}
+	return current, nil
+}
+
+func isWD19Component(component string) bool {
+	for _, known := range wd19ComponentNames {
+		if component == known {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneComponentVersions(versions map[string]string) map[string]string {
+	clone := make(map[string]string, len(versions))
+	for component, version := range versions {
+		clone[component] = version
+	}
+	return clone
 }
 
 func isDellSupportURL(sourceURL string) bool {

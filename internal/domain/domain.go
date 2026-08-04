@@ -1,5 +1,13 @@
 package domain
 
+const (
+	FirmwareComponentPackage            = "package"
+	FirmwareComponentEmbeddedController = "embedded_controller"
+	FirmwareComponentUSBHubGen1         = "usb_hub_gen1"
+	FirmwareComponentUSBHubGen2         = "usb_hub_gen2"
+	FirmwareComponentMST                = "mst"
+)
+
 type Report struct {
 	SchemaVersion int          `json:"schema_version"`
 	Platform      string       `json:"platform"`
@@ -67,15 +75,16 @@ type Check struct {
 }
 
 type FirmwareCandidate struct {
-	SourceURL        string   `json:"source_url"`
-	PackageName      string   `json:"package_name"`
-	DownloadURL      string   `json:"download_url"`
-	Version          string   `json:"version"`
-	ReleaseDate      string   `json:"release_date"`
-	SHA256           string   `json:"sha256"`
-	Format           string   `json:"format"`
-	SupportedOS      []string `json:"supported_os"`
-	CompatibleModels []string `json:"compatible_models"`
+	SourceURL         string            `json:"source_url"`
+	PackageName       string            `json:"package_name"`
+	DownloadURL       string            `json:"download_url"`
+	Version           string            `json:"version"`
+	ReleaseDate       string            `json:"release_date"`
+	SHA256            string            `json:"sha256"`
+	Format            string            `json:"format"`
+	SupportedOS       []string          `json:"supported_os"`
+	CompatibleModels  []string          `json:"compatible_models"`
+	ComponentVersions map[string]string `json:"component_versions,omitempty"`
 }
 
 type UpdateCheck struct {

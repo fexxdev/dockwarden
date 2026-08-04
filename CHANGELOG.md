@@ -11,6 +11,15 @@ All notable changes to `dockwarden` are recorded here.
 
 ### Firmware safety
 
+- Made the macOS fwupdtool path managed and independent from `PATH`.
+- Added full fwupd runtime hashes and compile/runtime version checks.
+- Added native HID preflight and exact fwupd DeviceId selection before install.
+- Added a same-process Dell serial check immediately before the fwupd writer.
+- Removed inherited writer environment and the CAB extractor `PATH` lookup.
+- Compared verified WD19 component versions and failed closed on incomplete data.
+- Normalized the actual upstream Dell dock component names on Linux.
+- Blocked newer MST payloads in both macOS firmware writers.
+- Added upstream fwupd port tests and a macOS CI fwupdtool build.
 - Bound native HID opens to the detected WD19 location and serial.
 - Added board, power, EC baseline, update-status, retry, and relock guards.
 - Added read-only component firmware reporting on macOS.

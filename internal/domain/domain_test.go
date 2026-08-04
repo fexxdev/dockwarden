@@ -28,3 +28,19 @@ func TestReportJSONKeepsDescriptorSeparateFromFirmware(t *testing.T) {
 		t.Fatalf("firmware version missing: %s", text)
 	}
 }
+
+func TestFirmwareCandidateJSONIncludesComponentVersions(t *testing.T) {
+	got, err := json.Marshal(FirmwareCandidate{
+		ComponentVersions: map[string]string{
+			"package":             "01.01.01.01",
+			"embedded_controller": "01.01.00.15",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	if !strings.Contains(text, `"component_versions":{"embedded_controller":"01.01.00.15","package":"01.01.01.01"}`) {
+		t.Fatalf("component versions missing: %s", text)
+	}
+}

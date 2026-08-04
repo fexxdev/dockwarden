@@ -39,11 +39,13 @@ The manifest records these values:
 - fwupd version;
 - pinned source commit;
 - Darwin patch SHA-256;
-- installed binary SHA-256.
+- installed binary SHA-256;
+- every runtime file below `bin`, `etc/fwupd`, `lib`, and `share/fwupd`.
 
-Before network access, Dockwarden verifies the file mode, manifest, and binary
-hash. It then runs `fwupdtool --version --json`. Compile and runtime versions
-must both be `2.2.1`.
+Before network access, Dockwarden verifies file modes, the exact runtime file
+set, and all hashes. It then runs `fwupdtool --version --json`. Compile and
+runtime versions must both be `2.2.1`. The process receives a minimal
+environment. It does not inherit fwupd or dynamic-loader overrides.
 
 ## Native read-only preflight
 
@@ -63,9 +65,9 @@ The preflight returns the service tag and module serial. It also reports if any
 CAB component is newer. A zero-update plan returns `up_to_date`. It does not run
 the install command.
 
-The native writer still rejects a newer MST because it cannot write MST. The
-fwupdtool writer can accept that plan because the pinned Dell plugin supports
-MST. Both paths use the same CAB parser and version checks.
+Both writers reject a newer MST. The pinned fwupd plugin supports MST, but this
+change does not expand the current safety policy. Both paths use the same CAB
+parser and version checks.
 
 ## Exact fwupd target
 
@@ -77,10 +79,12 @@ state. It selects one device with all these properties:
 - serial `<service-tag>/<module-serial>`;
 - full 40-character hexadecimal device ID.
 
-The module serial uses eight decimal digits, with leading zeroes.
+The module serial uses at least eight decimal digits, with leading zeroes.
 
 Dockwarden rejects zero matches, multiple matches, missing fields, and malformed
-JSON. It then passes the selected device ID to `install`.
+JSON. It then passes the selected device ID to `install`. The install process
+receives the expected serial. The Dell plugin reopens the EC, reads the serial
+from hardware, and compares it before the first writer runs.
 
 Exit code 2 means `nothing to do`. Dockwarden treats it as an error after a plan
 that requires an update. This result can indicate a changed target or stale
@@ -111,11 +115,14 @@ Linux fwupd names are normalized to the same component names before this check.
 
 ## Build and CI
 
-The macOS build enables upstream fwupd tests. The script runs the configured
-non-hardware test suite before installation.
+The macOS build enables upstream fwupd tests. The script starts from a fresh
+pinned source tree and a pinned Jinja2 environment. It runs the configured
+non-hardware test suite before installation. It excludes the USB backend test,
+which requires an empty physical USB bus.
 
 The macOS CI job installs build dependencies. It builds the pinned port, runs
-its tests, checks the manifest, and executes the read-only version command.
+its tests, validates the full manifest, and executes read-only version and
+enumeration commands.
 
 No CI step accesses a physical dock or runs a firmware install command.
 
@@ -124,4 +131,3 @@ No CI step accesses a physical dock or runs a firmware install command.
 Every failed check stops before `install`. Temporary firmware and state files
 are removed. Apply mode exits with a failure code for
 `version_check_unavailable` and `update_failed`.
-

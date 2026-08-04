@@ -42,11 +42,13 @@ go build -o dockwarden ./cmd/dockwarden
 
 On macOS, build with cgo enabled. The status reader uses IOKit and
 CoreFoundation. Build the upstream `fwupdtool` port first; see
-[the macOS build guide](tools/fwupd-macos/README.md). Set
-`DOCKWARDEN_FWUPDTOOL` to its path. If the variable is empty, Dockwarden uses
-`fwupdtool` from `PATH`. macOS may require HID or Input Monitoring permission
-for the terminal. If `status` reports denied HID access, grant that permission
-and run it again.
+[the macOS build guide](tools/fwupd-macos/README.md). Dockwarden uses the
+managed tool at
+`~/Library/Application Support/dockwarden/fwupd-2.2.1/bin/fwupdtool`.
+`DOCKWARDEN_FWUPDTOOL` can override it with an absolute path. Dockwarden never
+searches `PATH` for a firmware writer. macOS may require HID or Input Monitoring
+permission for the terminal. If `status` reports denied HID access, grant that
+permission and run it again.
 
 On Linux, install `fwupdmgr` and use the privilege model configured by the
 system. `dockwarden` does not invoke `sudo`.
@@ -76,8 +78,16 @@ Apply a firmware update:
 
 `update` is read-only. Only `update --apply` can download and write firmware.
 The updater accepts the official Dell CAB, verifies its SHA-256, and removes
-the temporary file after use. On macOS it runs upstream `fwupdtool` with the
-Dell Dock plugin and isolated temporary state.
+the temporary file after use. On macOS it verifies all managed runtime files
+and the fwupd compile/runtime version before network access. It runs fwupd with
+a minimal environment and isolated temporary state.
+
+Before an install, macOS reads the WD19 through HID. It checks identity, board,
+power, update state, five component versions, CAB members, and the MST policy.
+It selects exactly one fwupd device by plugin, embedded-controller instance ID,
+and `<service-tag>/<module-serial>` serial. The install receives that full
+40-character DeviceId. The Dell plugin reads the hardware serial again in the
+same process before its writer runs. Any failed check stops the install.
 
 An apply result of `update_staged` means that the platform accepted the update
 and requires a physical reconnect. Unplug and reconnect the dock USB-C cable.
@@ -105,6 +115,11 @@ The updater uses Dell driver `389W0`, which publishes the Linux CAB for the
 WD19 family. If Dell blocks the dynamic metadata page with HTTP 403,
 `dockwarden` uses browser-compatible request headers and a pinned official CAB.
 It still verifies the CAB SHA-256 before any firmware operation.
+
+The candidate records package, embedded-controller, USB hub Gen1, USB hub Gen2,
+and MST versions. A live Dell candidate inherits those values only when its
+SHA-256 matches the pinned CAB. Missing or conflicting component evidence gives
+`version_check_unavailable`; apply mode exits with code `2` and does not write.
 
 The Windows `.exe` is never executed. The project does not bundle Dell
 firmware blobs.

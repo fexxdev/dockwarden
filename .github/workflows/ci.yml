@@ -41,3 +41,30 @@ jobs:
         run: go vet ./...
       - name: Build native binary
         run: CGO_ENABLED=1 go build ./cmd/dockwarden
+      - name: Reject unsafe fwupdtool prefix
+        run: |
+          if ./tools/fwupd-macos/build-fwupdtool.sh "$HOME" >unsafe-prefix.log 2>&1; then
+            echo "unsafe fwupd prefix was accepted" >&2
+            exit 1
+          fi
+          grep -F "fwupdtool prefix must end in dockwarden/fwupd-2.2.1" unsafe-prefix.log
+          unowned_prefix="$RUNNER_TEMP/unowned/dockwarden/fwupd-2.2.1"
+          mkdir -p "$unowned_prefix"
+          if ./tools/fwupd-macos/build-fwupdtool.sh "$unowned_prefix" >unowned-prefix.log 2>&1; then
+            echo "unowned fwupd prefix was accepted" >&2
+            exit 1
+          fi
+          grep -F "refusing to replace an unowned fwupdtool prefix" unowned-prefix.log
+      - name: Build and test managed fwupdtool
+        run: |
+          brew install gcab glib gnutls json-glib libjcat libusb libxmlb meson ninja pkg-config rust
+          fwupd_prefix="$RUNNER_TEMP/dockwarden/fwupd-2.2.1"
+          ./tools/fwupd-macos/build-fwupdtool.sh "$fwupd_prefix"
+          test -x "$fwupd_prefix/bin/fwupdtool"
+          test -f "$fwupd_prefix/manifest.json"
+          DOCKWARDEN_TEST_FWUPD_PREFIX="$fwupd_prefix" go test -count=1 ./internal/update -run '^TestManagedFwupdToolPrefix$'
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" LANG=C LC_ALL=C \
+            "$fwupd_prefix/bin/fwupdtool" --version --json
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" LANG=C LC_ALL=C \
+            FWUPD_LOCALSTATEDIR="$RUNNER_TEMP/fwupd-state" CACHE_DIRECTORY="$RUNNER_TEMP/fwupd-cache" \
+            "$fwupd_prefix/bin/fwupdtool" --plugins dell_dock --json get-devices

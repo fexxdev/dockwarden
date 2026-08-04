@@ -97,27 +97,51 @@ func TestParseDriverPageRejectsUnsafeDownloadURL(t *testing.T) {
 	}
 }
 
-func TestCatalogCheckReturnsCandidate(t *testing.T) {
-	page := loadDriverPage(t)
-	httpClient := &fakeHTTPDoer{
-		response: &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewReader(page)),
+func TestCatalogCheckAttestsComponentVersionsOnlyAfterHashMatch(t *testing.T) {
+	pinned := PinnedWD19LinuxCandidate()
+	for _, test := range []struct {
+		name      string
+		page      []byte
+		wantState string
+		wantMap   bool
+	}{
+		{
+			name:      "matching hash",
+			page:      []byte(strings.Replace(string(loadDriverPage(t)), "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", pinned.SHA256, 1)),
+			wantState: "update_available",
+			wantMap:   true,
 		},
-	}
-	client := CatalogClient{
-		HTTP: httpClient,
-		Sources: map[string]string{
-			"Dell Dock WD19": wd19SourceURL,
+		{
+			name:      "different hash",
+			page:      loadDriverPage(t),
+			wantState: "version_check_unavailable",
 		},
-	}
-	result := client.Check(context.Background(), &domain.Dock{Model: "Dell Dock WD19"})
-	if result.State != "update_available" || result.SourceURL != wd19SourceURL ||
-		result.Candidate == nil || result.Candidate.Version != "01.00.36" {
-		t.Fatalf("unexpected update result: %+v", result)
-	}
-	if httpClient.request == nil || httpClient.request.Header.Get("User-Agent") == "" {
-		t.Fatal("expected a descriptive user agent")
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			httpClient := &fakeHTTPDoer{response: &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(test.page)),
+			}}
+			client := CatalogClient{
+				HTTP: httpClient,
+				Sources: map[string]string{
+					"Dell Dock WD19": wd19SourceURL,
+				},
+				Fallbacks: map[string]domain.FirmwareCandidate{
+					"Dell Dock WD19": pinned,
+				},
+			}
+			result := client.Check(context.Background(), wd19DockWithFirmware(wd19CurrentFirmware()))
+			if result.State != test.wantState || result.SourceURL != wd19SourceURL || result.Candidate == nil {
+				t.Fatalf("unexpected update result: %+v", result)
+			}
+			if test.wantMap && result.Candidate.ComponentVersions["package"] != "01.01.01.01" {
+				t.Fatalf("matching candidate did not inherit component versions: %+v", result.Candidate)
+			}
+			if httpClient.request == nil || httpClient.request.Header.Get("User-Agent") == "" {
+				t.Fatal("expected a descriptive user agent")
+			}
+		})
 	}
 }
 
@@ -136,16 +160,7 @@ func TestCatalogCheckHandlesNetworkFailure(t *testing.T) {
 }
 
 func TestCatalogCheckUsesPinnedCandidateOnDellForbidden(t *testing.T) {
-	pinned := domain.FirmwareCandidate{
-		PackageName:      "DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.11.cab",
-		DownloadURL:      "https://dl.dell.com/FOLDER14009221M/1/DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.11.cab",
-		Version:          "01.01.11.01, 01.01.11.01",
-		ReleaseDate:      "19 Apr 2026",
-		SHA256:           "f476fda34db1299da1c251bf04144d892a897a81fad0a40ee0c9771471f41614",
-		Format:           "CAB",
-		SupportedOS:      []string{"Linux"},
-		CompatibleModels: []string{"Dell Dock WD19"},
-	}
+	pinned := PinnedWD19LinuxCandidate()
 	client := CatalogClient{
 		HTTP: &fakeHTTPDoer{response: &http.Response{
 			StatusCode: http.StatusForbidden,
@@ -158,11 +173,122 @@ func TestCatalogCheckUsesPinnedCandidateOnDellForbidden(t *testing.T) {
 			"Dell Dock WD19": pinned,
 		},
 	}
-	result := client.Check(context.Background(), &domain.Dock{Model: "Dell Dock WD19"})
+	result := client.Check(context.Background(), wd19DockWithFirmware(wd19CurrentFirmware()))
 	if result.State != "update_available" || result.Candidate == nil || result.Candidate.DownloadURL != pinned.DownloadURL {
 		t.Fatalf("unexpected pinned result: %+v", result)
 	}
 	if !strings.Contains(result.Reason, "pinned") {
 		t.Fatalf("fallback reason is not explicit: %s", result.Reason)
 	}
+}
+
+func TestCatalogCheckDecidesFromComponentVersions(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		firmware  []domain.FirmwareObservation
+		edit      func(*domain.FirmwareCandidate)
+		wantState string
+	}{
+		{
+			name:      "newer component",
+			firmware:  wd19CurrentFirmware(),
+			wantState: "update_available",
+		},
+		{
+			name:     "equal components",
+			firmware: wd19CurrentFirmware(),
+			edit: func(candidate *domain.FirmwareCandidate) {
+				candidate.ComponentVersions["package"] = "01.00.47.01"
+				candidate.ComponentVersions["embedded_controller"] = "01.01.00.13"
+			},
+			wantState: "up_to_date",
+		},
+		{
+			name:     "older component",
+			firmware: wd19CurrentFirmware(),
+			edit: func(candidate *domain.FirmwareCandidate) {
+				candidate.ComponentVersions["package"] = "01.00.00.01"
+				candidate.ComponentVersions["embedded_controller"] = "01.01.00.13"
+			},
+			wantState: "up_to_date",
+		},
+		{
+			name: "missing component",
+			firmware: []domain.FirmwareObservation{
+				{Component: "package", Version: "01.00.47.01"},
+				{Component: "embedded_controller", Version: "01.01.00.13"},
+				{Component: "usb_hub_gen1", Version: "01.23"},
+				{Component: "usb_hub_gen2", Version: "01.62"},
+			},
+			wantState: "version_check_unavailable",
+		},
+		{
+			name: "conflicting component",
+			firmware: append(wd19CurrentFirmware(), domain.FirmwareObservation{
+				Component: "package", Version: "01.00.47.02",
+			}),
+			wantState: "version_check_unavailable",
+		},
+		{
+			name:     "unsupported candidate component",
+			firmware: wd19CurrentFirmware(),
+			edit: func(candidate *domain.FirmwareCandidate) {
+				candidate.ComponentVersions["thunderbolt"] = "01.00"
+			},
+			wantState: "version_check_unavailable",
+		},
+		{
+			name:     "invalid later component after newer package",
+			firmware: wd19CurrentFirmware(),
+			edit: func(candidate *domain.FirmwareCandidate) {
+				candidate.ComponentVersions["mst"] = "invalid"
+			},
+			wantState: "version_check_unavailable",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := PinnedWD19LinuxCandidate()
+			candidate.ComponentVersions = cloneTestComponentVersions(candidate.ComponentVersions)
+			if test.edit != nil {
+				test.edit(&candidate)
+			}
+			client := CatalogClient{
+				HTTP: &fakeHTTPDoer{response: &http.Response{
+					StatusCode: http.StatusForbidden,
+					Body:       io.NopCloser(strings.NewReader("blocked")),
+				}},
+				Sources:   map[string]string{"Dell Dock WD19": wd19SourceURL},
+				Fallbacks: map[string]domain.FirmwareCandidate{"Dell Dock WD19": candidate},
+			}
+			result := client.Check(context.Background(), wd19DockWithFirmware(test.firmware))
+			if result.State != test.wantState {
+				t.Fatalf("state = %q, want %q: %+v", result.State, test.wantState, result)
+			}
+		})
+	}
+}
+
+func wd19DockWithFirmware(firmware []domain.FirmwareObservation) *domain.Dock {
+	return &domain.Dock{
+		Model:    "Dell Dock WD19",
+		Firmware: firmware,
+	}
+}
+
+func wd19CurrentFirmware() []domain.FirmwareObservation {
+	return []domain.FirmwareObservation{
+		{Component: "package", Version: "01.00.47.01"},
+		{Component: "embedded_controller", Version: "01.01.00.13"},
+		{Component: "usb_hub_gen1", Version: "01.23"},
+		{Component: "usb_hub_gen2", Version: "01.62"},
+		{Component: "mst", Version: "05.07.08"},
+	}
+}
+
+func cloneTestComponentVersions(versions map[string]string) map[string]string {
+	clone := make(map[string]string, len(versions))
+	for component, version := range versions {
+		clone[component] = version
+	}
+	return clone
 }

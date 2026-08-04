@@ -22,6 +22,10 @@ type FirmwareUpdater interface {
 	Apply(context.Context, *domain.Dock, *domain.FirmwareCandidate) domain.UpdateCheck
 }
 
+type FirmwareUpdaterReadiness interface {
+	CheckReady(context.Context) error
+}
+
 type Dependencies struct {
 	Inspector Inspector
 	Updates   UpdateChecker
@@ -65,7 +69,7 @@ func Run(ctx context.Context, options cli.Options, dependencies Dependencies) in
 	if report.State == "detected" {
 		if options.Command == "update" && options.Apply && report.Update != nil {
 			switch report.Update.State {
-			case "vendor_metadata_unavailable", "unsupported", "update_failed":
+			case "vendor_metadata_unavailable", "version_check_unavailable", "unsupported", "update_failed":
 				return 2
 			}
 		}
@@ -92,6 +96,25 @@ func checkUpdates(ctx context.Context, report domain.Report, updates UpdateCheck
 }
 
 func runFirmwareUpdate(ctx context.Context, report domain.Report, updates UpdateChecker, updater FirmwareUpdater, apply bool) *domain.UpdateCheck {
+	if report.State != "detected" || report.Dock == nil {
+		return checkUpdates(ctx, report, updates)
+	}
+	if apply {
+		if updater == nil {
+			return &domain.UpdateCheck{
+				State:  "unsupported",
+				Reason: "no firmware write backend is available for this platform",
+			}
+		}
+		if readiness, ok := updater.(FirmwareUpdaterReadiness); ok {
+			if err := readiness.CheckReady(ctx); err != nil {
+				return &domain.UpdateCheck{
+					State:  "update_failed",
+					Reason: err.Error(),
+				}
+			}
+		}
+	}
 	result := checkUpdates(ctx, report, updates)
 	if !apply {
 		if result.State == "update_available" {
@@ -100,11 +123,6 @@ func runFirmwareUpdate(ctx context.Context, report domain.Report, updates Update
 		return result
 	}
 	if result.State != "update_available" || result.Candidate == nil {
-		return result
-	}
-	if updater == nil {
-		result.State = "unsupported"
-		result.Reason = "no firmware write backend is available for this platform"
 		return result
 	}
 	applied := updater.Apply(ctx, report.Dock, result.Candidate)

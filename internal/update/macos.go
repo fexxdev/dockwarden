@@ -9,9 +9,12 @@ import (
 	"strings"
 
 	"github.com/fexxdev/dockwarden/internal/domain"
+	"github.com/fexxdev/dockwarden/internal/firmwareversion"
 )
 
 const (
+	bsdtarPath = "/usr/bin/bsdtar"
+
 	wd19Gen2ProductID uint16 = 0xb06e
 	wd19Gen1ProductID uint16 = 0xb06f
 
@@ -61,7 +64,11 @@ func (e BsdtarExtractor) Extract(ctx context.Context, archivePath, name string) 
 	if runner == nil {
 		runner = systemRunner{}
 	}
-	output, err := runner.Run(ctx, "bsdtar", "-xOf", archivePath, name)
+	output, err := runCommandWithEnv(ctx, runner, []string{
+		"PATH=/usr/bin:/bin",
+		"LANG=C",
+		"LC_ALL=C",
+	}, bsdtarPath, "-xOf", archivePath, name)
 	if err != nil {
 		return nil, fmt.Errorf("cannot extract %s from Dell CAB: %w", name, err)
 	}
@@ -76,6 +83,26 @@ type MacUpdater struct {
 	Open      HIDOpener
 	Extractor FirmwareExtractor
 	TempDir   string
+}
+
+// MacPreflightResult identifies the dock that passed the read-only safety checks.
+type MacPreflightResult struct {
+	ServiceTag      string
+	ModuleSerial    uint64
+	UpdateAvailable bool
+}
+
+// MacPreflightReader performs the native read-only WD19 checks before a writer runs.
+type MacPreflightReader struct {
+	Open      HIDOpener
+	Extractor FirmwareExtractor
+}
+
+type macWritePreflight struct {
+	result     MacPreflightResult
+	connection HIDConnection
+	base       DellHID
+	plan       macUpdatePlan
 }
 
 type macUpdatePlan struct {
@@ -95,6 +122,102 @@ type macHubUpdate struct {
 	UnlockTarget byte
 	Blob         []byte
 	Candidate    string
+}
+
+func (p macUpdatePlan) hasUpdates() bool {
+	return p.updateEC || p.updatePackage || len(p.hubs) > 0
+}
+
+func (p MacPreflightReader) Check(ctx context.Context, dock *domain.Dock, payloadPath string) (MacPreflightResult, error) {
+	prepared, err := p.prepare(ctx, dock, payloadPath)
+	if err != nil {
+		return MacPreflightResult{}, err
+	}
+	prepared.connection.Close()
+	return prepared.result, nil
+}
+
+func (p MacPreflightReader) prepare(ctx context.Context, dock *domain.Dock, payloadPath string) (macWritePreflight, error) {
+	if err := ctx.Err(); err != nil {
+		return macWritePreflight{}, err
+	}
+	if !isSupportedWD19(dock) {
+		return macWritePreflight{}, fmt.Errorf("firmware backend accepts only the detected Dell Dock WD19 (413c:b06e)")
+	}
+	if p.Open == nil {
+		return macWritePreflight{}, fmt.Errorf("macOS HID opener is not configured")
+	}
+	target, err := hidTargetForProduct(dock, wd19Gen2ProductID)
+	if err != nil {
+		return macWritePreflight{}, err
+	}
+	connection, err := p.Open(target)
+	if err != nil {
+		return macWritePreflight{}, fmt.Errorf("cannot open WD19 control HID: %w", err)
+	}
+	if connection == nil {
+		return macWritePreflight{}, fmt.Errorf("macOS HID opener returned no WD19 control device")
+	}
+	keepConnection := false
+	defer func() {
+		if !keepConnection {
+			connection.Close()
+		}
+	}()
+	base := DellHID{Reports: connection}
+	dockData, err := base.ReadDockData()
+	if err != nil {
+		return macWritePreflight{}, fmt.Errorf("cannot read WD19 data over HID: %w", err)
+	}
+	if strings.TrimSpace(dockData.ServiceTag) == "" {
+		return macWritePreflight{}, fmt.Errorf("WD19 service tag is unavailable")
+	}
+	if dockData.ModuleSerial == 0 {
+		return macWritePreflight{}, fmt.Errorf("WD19 module serial is unavailable")
+	}
+	components, err := base.ReadDockInfo()
+	if err != nil {
+		return macWritePreflight{}, fmt.Errorf("cannot read WD19 component versions over HID: %w", err)
+	}
+	ecComponent, ok := findDockComponent(components, dockDeviceTypeEC, 0)
+	if !ok {
+		return macWritePreflight{}, fmt.Errorf("WD19 component list has no embedded controller version")
+	}
+	if err := validateMacPreflight(dockData, ecComponent.Version); err != nil {
+		return macWritePreflight{}, err
+	}
+	if err := requireWD19Components(components); err != nil {
+		return macWritePreflight{}, err
+	}
+	status, err := base.ReadUpdateStatus()
+	if err != nil {
+		return macWritePreflight{}, fmt.Errorf("cannot read WD19 firmware update status: %w", err)
+	}
+	if status != firmwareUpdateComplete {
+		return macWritePreflight{}, fmt.Errorf("WD19 reports firmware update status %#02x, refusing a new update", status)
+	}
+	extractor := p.Extractor
+	if extractor == nil {
+		extractor = BsdtarExtractor{}
+	}
+	plan, err := buildMacUpdatePlan(ctx, extractor, payloadPath, dockData, components)
+	if err != nil {
+		return macWritePreflight{}, err
+	}
+	if plan.unsupportedMST != "" {
+		return macWritePreflight{}, fmt.Errorf("MST candidate %s is newer, but the current macOS safety policy rejects MST updates", plan.unsupportedMST)
+	}
+	keepConnection = true
+	return macWritePreflight{
+		result: MacPreflightResult{
+			ServiceTag:      dockData.ServiceTag,
+			ModuleSerial:    dockData.ModuleSerial,
+			UpdateAvailable: plan.hasUpdates(),
+		},
+		connection: connection,
+		base:       base,
+		plan:       plan,
+	}, nil
 }
 
 func (u MacUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *domain.FirmwareCandidate) (result domain.UpdateCheck) {
@@ -122,26 +245,23 @@ func (u MacUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *dom
 	if u.Open == nil {
 		return failed(candidate, "macOS HID opener is not configured")
 	}
-	baseTarget, err := hidTargetForProduct(dock, wd19Gen2ProductID)
-	if err != nil {
-		return failed(candidate, err.Error())
-	}
-
 	payloadPath, err := (FwupdUpdater{HTTP: u.HTTP, TempDir: u.TempDir}).download(ctx, candidate)
 	if err != nil {
 		return failed(candidate, err.Error())
 	}
 	defer os.Remove(payloadPath)
 
-	baseConnection, err := u.Open(baseTarget)
+	prepared, err := (MacPreflightReader{
+		Open:      u.Open,
+		Extractor: u.Extractor,
+	}).prepare(ctx, dock, payloadPath)
 	if err != nil {
-		return failed(candidate, "cannot open WD19 control HID: "+err.Error())
+		return failed(candidate, err.Error())
 	}
-	if baseConnection == nil {
-		return failed(candidate, "macOS HID opener returned no WD19 control device")
-	}
+	baseConnection := prepared.connection
 	defer baseConnection.Close()
-	base := DellHID{Reports: baseConnection}
+	base := prepared.base
+	plan := prepared.plan
 	unlockedTargets := make([]byte, 0, 4)
 	activated := false
 	defer func() {
@@ -154,44 +274,6 @@ func (u MacUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *dom
 			}
 		}
 	}()
-
-	dockData, err := base.ReadDockData()
-	if err != nil {
-		return failed(candidate, "cannot read WD19 data over HID: "+err.Error())
-	}
-	if dockData.DockType != salomonDockType {
-		return failed(candidate, fmt.Sprintf("detected WD19 dock type %#02x is not supported by the native updater", dockData.DockType))
-	}
-	components, err := base.ReadDockInfo()
-	if err != nil {
-		return failed(candidate, "cannot read WD19 component versions over HID: "+err.Error())
-	}
-	ecComponent, ok := findDockComponent(components, dockDeviceTypeEC, 0)
-	if !ok {
-		return failed(candidate, "WD19 component list has no embedded controller version")
-	}
-	if err := validateMacPreflight(dockData, ecComponent.Version); err != nil {
-		return failed(candidate, err.Error())
-	}
-	status, err := base.ReadUpdateStatus()
-	if err != nil {
-		return failed(candidate, "cannot read WD19 firmware update status: "+err.Error())
-	}
-	if status != firmwareUpdateComplete {
-		return failed(candidate, fmt.Sprintf("WD19 reports firmware update status %#02x, refusing a new update", status))
-	}
-
-	extractor := u.Extractor
-	if extractor == nil {
-		extractor = BsdtarExtractor{}
-	}
-	plan, err := buildMacUpdatePlan(ctx, extractor, payloadPath, dockData, components)
-	if err != nil {
-		return failed(candidate, err.Error())
-	}
-	if plan.unsupportedMST != "" {
-		return failed(candidate, "MST candidate "+plan.unsupportedMST+" is newer, but the native macOS MST writer is not implemented; no component was flashed")
-	}
 
 	updated := make([]string, 0, 4)
 	if plan.updateEC {
@@ -291,6 +373,29 @@ func validateMacPreflight(dockData DockData, ecVersion string) error {
 	}
 	if minimumVersionIsNewer {
 		return fmt.Errorf("WD19 EC version %s is below the safe baseline 01.01.00.01", ecVersion)
+	}
+	return nil
+}
+
+func requireWD19Components(components []DockComponent) error {
+	required := []struct {
+		deviceType byte
+		subType    byte
+		name       string
+	}{
+		{dockDeviceTypeEC, 0, "embedded controller"},
+		{dockDeviceTypeHub, 0, "USB hub Gen2"},
+		{dockDeviceTypeHub, 1, "USB hub Gen1"},
+	}
+	for _, component := range required {
+		if _, ok := findDockComponent(components, component.deviceType, component.subType); !ok {
+			return fmt.Errorf("WD19 component list has no %s version", component.name)
+		}
+	}
+	if _, ok := findDockComponent(components, dockDeviceTypeMST, 0); !ok {
+		if _, ok := findDockComponent(components, dockDeviceTypeMST, 1); !ok {
+			return fmt.Errorf("WD19 component list has no MST version")
+		}
 	}
 	return nil
 }
@@ -577,36 +682,8 @@ func tripleVersionAt(blob []byte, offset int) (string, error) {
 }
 
 func versionIsNewer(candidate, current string) (bool, error) {
-	candidateParts, err := parseFirmwareVersion(candidate)
-	if err != nil {
-		return false, fmt.Errorf("invalid candidate version %q: %w", candidate, err)
-	}
-	currentParts, err := parseFirmwareVersion(current)
-	if err != nil {
-		return false, fmt.Errorf("invalid current version %q: %w", current, err)
-	}
-	candidateParts = trimLeadingVersionZeros(candidateParts)
-	currentParts = trimLeadingVersionZeros(currentParts)
-	for index := 0; index < len(candidateParts) || index < len(currentParts); index++ {
-		var candidatePart, currentPart int
-		if index < len(candidateParts) {
-			candidatePart = candidateParts[index]
-		}
-		if index < len(currentParts) {
-			currentPart = currentParts[index]
-		}
-		if candidatePart != currentPart {
-			return candidatePart > currentPart, nil
-		}
-	}
-	return false, nil
-}
-
-func trimLeadingVersionZeros(parts []int) []int {
-	for len(parts) > 1 && parts[0] == 0 {
-		parts = parts[1:]
-	}
-	return parts
+	comparison, err := firmwareversion.Compare(candidate, current)
+	return comparison > 0, err
 }
 
 func parseFirmwareVersion(value string) ([]int, error) {

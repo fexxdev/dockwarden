@@ -214,6 +214,6 @@ func (systemRunner) Run(ctx context.Context, name string, args ...string) ([]byt
 
 func (systemRunner) RunWithEnv(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, args...)
-	command.Env = append(os.Environ(), env...)
+	command.Env = append([]string(nil), env...)
 	return command.CombinedOutput()
 }
