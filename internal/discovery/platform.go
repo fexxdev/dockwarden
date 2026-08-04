@@ -33,11 +33,14 @@ type LinuxInspector struct {
 }
 
 func (i LinuxInspector) Inspect(ctx context.Context, command string) (domain.Report, error) {
-	devices, warnings, err := (LinuxCollector{Runner: i.Runner}).Collect(ctx)
+	devices, firmware, warnings, err := (LinuxCollector{Runner: i.Runner}).CollectWithFirmware(ctx)
 	if err != nil {
 		return domain.Report{}, err
 	}
 	report := BuildReport("linux", command, devices)
+	if report.Dock != nil {
+		report.Dock.Firmware = firmware
+	}
 	report.Warnings = append(report.Warnings, warnings...)
 	return report, nil
 }

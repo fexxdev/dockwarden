@@ -28,9 +28,16 @@ func BuildReport(platform, command string, devices []domain.USBDevice) domain.Re
 		}
 	}
 
-	dock.Devices = make([]domain.USBDevice, 0, len(devices))
-	for _, device := range devices {
+	selected := selectDockDevices(devices)
+	byLocation := indexDevices(devices)
+	dock.Devices = make([]domain.USBDevice, 0, len(selected))
+	for _, device := range selected {
 		device.Kind = classifyDevice(device, rootDepth)
+		if device.Kind == "dock_component" &&
+			!isDockComponent(device) &&
+			hasDockAncestor(device, byLocation, map[string]bool{}) {
+			device.Kind = "downstream_usb"
+		}
 		dock.Devices = append(dock.Devices, device)
 	}
 	dock.Services = buildServices(dock.Devices)
@@ -58,11 +65,89 @@ func classifyDevice(device domain.USBDevice, rootDepth int) string {
 		return "ethernet"
 	case strings.Contains(text, "audio"):
 		return "audio"
+	case isDockComponent(device):
+		return "dock_component"
 	case device.Depth > rootDepth:
 		return "downstream_usb"
 	default:
 		return "dock_component"
 	}
+}
+
+func isDockComponent(device domain.USBDevice) bool {
+	text := strings.ToLower(strings.Join([]string{device.Name, device.Product}, " "))
+	return strings.Contains(text, "dell dock")
+}
+
+func selectDockDevices(devices []domain.USBDevice) []domain.USBDevice {
+	hasTopology := false
+	byLocation := indexDevices(devices)
+	for _, device := range devices {
+		if device.ParentLocation != "" {
+			hasTopology = true
+		}
+	}
+	if !hasTopology {
+		return append([]domain.USBDevice(nil), devices...)
+	}
+
+	selected := make([]domain.USBDevice, 0, len(devices))
+	for _, device := range devices {
+		if dockDeviceRelated(device, byLocation, map[string]bool{}) {
+			selected = append(selected, device)
+		}
+	}
+	return selected
+}
+
+func indexDevices(devices []domain.USBDevice) map[string]domain.USBDevice {
+	byLocation := make(map[string]domain.USBDevice)
+	for _, device := range devices {
+		if device.Location != "" {
+			byLocation[device.Location] = device
+		}
+	}
+	return byLocation
+}
+
+func dockDeviceRelated(device domain.USBDevice, byLocation map[string]domain.USBDevice, visiting map[string]bool) bool {
+	if isWD19(device) || isDockComponent(device) {
+		return true
+	}
+	if device.ParentLocation == "" {
+		return false
+	}
+	if device.Location != "" {
+		if visiting[device.Location] {
+			return false
+		}
+		visiting[device.Location] = true
+	}
+	parent, ok := byLocation[device.ParentLocation]
+	if !ok {
+		return false
+	}
+	return dockDeviceRelated(parent, byLocation, visiting)
+}
+
+func hasDockAncestor(device domain.USBDevice, byLocation map[string]domain.USBDevice, visiting map[string]bool) bool {
+	if device.ParentLocation == "" {
+		return false
+	}
+	if device.Location != "" {
+		if visiting[device.Location] {
+			return false
+		}
+		visiting[device.Location] = true
+	}
+	parent, ok := byLocation[device.ParentLocation]
+	if !ok {
+		return false
+	}
+	if isWD19(parent) || isDockComponent(parent) {
+		return true
+	}
+	return hasDockAncestor(parent, byLocation, visiting)
 }
 
 func buildServices(devices []domain.USBDevice) []domain.ServiceObservation {

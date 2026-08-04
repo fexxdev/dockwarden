@@ -32,6 +32,7 @@ type USBDevice struct {
 	Class             string `json:"class,omitempty"`
 	Serial            string `json:"serial,omitempty"`
 	Location          string `json:"location,omitempty"`
+	ParentLocation    string `json:"parent_location,omitempty"`
 	DescriptorVersion string `json:"descriptor_version,omitempty"`
 	VendorID          uint16 `json:"vendor_id"`
 	ProductID         uint16 `json:"product_id"`

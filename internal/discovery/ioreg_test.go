@@ -41,4 +41,7 @@ func TestParseIORegistry(t *testing.T) {
 	if devices[lan].Vendor != "Realtek" || devices[lan].Depth <= devices[root].Depth {
 		t.Fatalf("unexpected LAN fields or depth: %+v", devices[lan])
 	}
+	if devices[lan].ParentLocation != "00152000" {
+		t.Fatalf("unexpected LAN parent location: %+v", devices[lan])
+	}
 }

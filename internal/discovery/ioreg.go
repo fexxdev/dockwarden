@@ -13,22 +13,24 @@ import (
 var ioregNodePattern = regexp.MustCompile("\\+-o\\s+(.+?)\\s+<class\\s+([^,>]+)")
 
 type ioregNode struct {
-	name         string
-	class        string
-	depth        int
-	location     string
-	product      string
-	vendor       string
-	serial       string
-	vendorID     uint16
-	productID    uint16
-	bcdDevice    uint64
-	hasBCDDevice bool
+	name           string
+	class          string
+	depth          int
+	location       string
+	product        string
+	vendor         string
+	serial         string
+	vendorID       uint16
+	productID      uint16
+	bcdDevice      uint64
+	hasBCDDevice   bool
+	parentLocation string
 }
 
 func ParseIORegistry(input string) ([]domain.USBDevice, error) {
 	var devices []domain.USBDevice
 	var current *ioregNode
+	var stack []*ioregNode
 
 	finish := func() {
 		if current == nil || !strings.Contains(current.class, "IOUSBHostDevice") {
@@ -45,15 +47,16 @@ func ParseIORegistry(input string) ([]domain.USBDevice, error) {
 		}
 
 		device := domain.USBDevice{
-			Name:      current.name,
-			Vendor:    vendor,
-			Product:   product,
-			Class:     current.class,
-			Serial:    current.serial,
-			Location:  current.location,
-			VendorID:  current.vendorID,
-			ProductID: current.productID,
-			Depth:     current.depth,
+			Name:           current.name,
+			Vendor:         vendor,
+			Product:        product,
+			Class:          current.class,
+			Serial:         current.serial,
+			Location:       current.location,
+			ParentLocation: current.parentLocation,
+			VendorID:       current.vendorID,
+			ProductID:      current.productID,
+			Depth:          current.depth,
 		}
 		if current.hasBCDDevice {
 			device.DescriptorVersion = formatBCD(current.bcdDevice)
@@ -67,6 +70,13 @@ func ParseIORegistry(input string) ([]domain.USBDevice, error) {
 		line := scanner.Text()
 		if node, ok := parseIORegistryNode(line); ok {
 			finish()
+			if len(stack) > node.depth {
+				stack = stack[:node.depth]
+			}
+			if len(stack) > 0 {
+				node.parentLocation = stack[len(stack)-1].location
+			}
+			stack = append(stack, node)
 			current = node
 			continue
 		}

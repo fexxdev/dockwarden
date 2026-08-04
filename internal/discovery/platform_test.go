@@ -59,3 +59,24 @@ func TestLinuxInspectorCarriesOptionalWarnings(t *testing.T) {
 		t.Fatalf("expected fwupdmgr warning: %v", report.Warnings)
 	}
 }
+
+func TestLinuxInspectorIncludesFwupdVersions(t *testing.T) {
+	input, err := os.ReadFile(filepath.Join("testdata", "wd19-lsusb.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeCommandRunner{
+		outputs: map[string][]byte{
+			"lsusb":                input,
+			"fwupdmgr get-devices": []byte("Devices\nDell Dock WD19\n  Current version: 01.01.14.01\n"),
+		},
+		errors: map[string]error{},
+	}
+	report, err := (LinuxInspector{Runner: runner}).Inspect(context.Background(), "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Dock == nil || len(report.Dock.Firmware) != 1 || report.Dock.Firmware[0].Version != "01.01.14.01" {
+		t.Fatalf("expected fwupd firmware inventory: %+v", report.Dock)
+	}
+}

@@ -1,4 +1,9 @@
 # Dockwarden design
+## Current implementation
+
+The read-only MVP uses the Dell WD19 USB identifiers `0x413c:0xb06e` and parses macOS IORegistry or Linux `lsusb` output.
+
+The update check reads the official WD19 driver metadata page. It accepts a candidate only when the page provides a compatible model, version, release date, package name, and SHA-256. It does not download or execute a firmware package.
 
 Date: 2026-08-04
 
