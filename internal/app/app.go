@@ -1,0 +1,157 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"io"
+
+	"github.com/fexxdev/dockwarden/internal/cli"
+	"github.com/fexxdev/dockwarden/internal/domain"
+	"github.com/fexxdev/dockwarden/internal/output"
+)
+
+type Inspector interface {
+	Inspect(context.Context, string) (domain.Report, error)
+}
+
+type UpdateChecker interface {
+	Check(context.Context, *domain.Dock) domain.UpdateCheck
+}
+
+type Dependencies struct {
+	Inspector Inspector
+	Updates   UpdateChecker
+	Out       io.Writer
+	Err       io.Writer
+}
+
+func Run(ctx context.Context, options cli.Options, dependencies Dependencies) int {
+	if dependencies.Inspector == nil {
+		writeError(dependencies.Err, "inspector is not configured")
+		return 2
+	}
+
+	report, err := dependencies.Inspector.Inspect(ctx, options.Command)
+	if err != nil {
+		writeError(dependencies.Err, err.Error())
+		return 2
+	}
+	report.Command = options.Command
+
+	if options.Command == "doctor" {
+		report.Checks = append(report.Checks, doctorChecks(report)...)
+	}
+	if options.Command == "check-updates" {
+		report.Update = checkUpdates(ctx, report, dependencies.Updates)
+	}
+
+	if options.JSON {
+		err = output.RenderJSON(dependencies.Out, report)
+	} else {
+		err = output.RenderText(dependencies.Out, report, options.Verbose)
+	}
+	if err != nil {
+		writeError(dependencies.Err, err.Error())
+		return 2
+	}
+	if report.State == "detected" {
+		return 0
+	}
+	return 1
+}
+
+func checkUpdates(ctx context.Context, report domain.Report, updates UpdateChecker) *domain.UpdateCheck {
+	if report.State != "detected" || report.Dock == nil {
+		return &domain.UpdateCheck{
+			State:  "not_checked",
+			Reason: "dock not detected",
+		}
+	}
+	if updates == nil {
+		return &domain.UpdateCheck{
+			State:  "vendor_metadata_unavailable",
+			Reason: "update checker is not configured",
+		}
+	}
+	result := updates.Check(ctx, report.Dock)
+	return &result
+}
+
+func doctorChecks(report domain.Report) []domain.Check {
+	checks := []domain.Check{
+		{
+			Name:    "model_identity",
+			State:   "missing",
+			Details: "WD19 was not detected",
+		},
+		{
+			Name:    "usb_enumeration",
+			State:   "missing",
+			Details: "no dock USB devices were enumerated",
+		},
+		{
+			Name:    "ethernet",
+			State:   "missing",
+			Details: "Ethernet interface was not enumerated",
+		},
+		{
+			Name:    "audio",
+			State:   "missing",
+			Details: "audio interface was not enumerated",
+		},
+		{
+			Name:    "downstream_usb",
+			State:   "missing",
+			Details: "no downstream USB device was enumerated",
+		},
+		{
+			Name:    "firmware",
+			State:   "unavailable",
+			Details: "no firmware-aware source reported a version",
+		},
+	}
+	if report.Dock == nil {
+		return checks
+	}
+
+	checks[0] = domain.Check{
+		Name:    "model_identity",
+		State:   "pass",
+		Details: report.Dock.Model,
+	}
+	if len(report.Dock.Devices) > 0 {
+		checks[1] = domain.Check{
+			Name:    "usb_enumeration",
+			State:   "pass",
+			Details: fmt.Sprintf("%d USB devices", len(report.Dock.Devices)),
+		}
+	}
+	for index := 2; index <= 4; index++ {
+		serviceName := checks[index].Name
+		for _, service := range report.Dock.Services {
+			if service.Name == serviceName {
+				checks[index] = domain.Check{
+					Name:    service.Name,
+					State:   service.State,
+					Details: service.Evidence,
+				}
+				break
+			}
+		}
+	}
+	if report.Dock.FirmwareVersion != "" || len(report.Dock.Firmware) > 0 {
+		checks[5] = domain.Check{
+			Name:    "firmware",
+			State:   "pass",
+			Details: "version reported by a firmware-aware source",
+		}
+	}
+	return checks
+}
+
+func writeError(w io.Writer, message string) {
+	if w == nil {
+		return
+	}
+	fmt.Fprintf(w, "dockwarden: %s\n", message)
+}
