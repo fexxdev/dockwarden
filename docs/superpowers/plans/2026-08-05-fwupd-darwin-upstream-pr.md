@@ -26,7 +26,7 @@ Linux libusb path unchanged. Guard plugin ordering rules by platform.
 
 ## Tasks
 
-### 1. Establish the upstream baseline
+### Task 1: Establish the upstream baseline
 
 **Files:** fwupd clone only.
 
@@ -36,7 +36,7 @@ Linux libusb path unchanged. Guard plugin ordering rules by platform.
 
 **Verify:** `git status`, Meson configure, and the focused baseline tests.
 
-### 2. Add test-first coverage
+### Task 2: Add test-first coverage
 
 **Files:**
 
@@ -56,7 +56,7 @@ Linux libusb path unchanged. Guard plugin ordering rules by platform.
 
 **Verify:** Focused GTests fail before the implementation and pass after it.
 
-### 3. Implement the Darwin HID transport
+### Task 3: Implement the Darwin HID transport
 
 **Files:**
 
@@ -77,7 +77,7 @@ Linux libusb path unchanged. Guard plugin ordering rules by platform.
 **Verify:** Compile with warnings enabled on macOS and run the focused HID
 tests. Confirm the Linux build path has no Darwin-only symbols.
 
-### 4. Make plugin ordering platform-safe
+### Task 4: Make plugin ordering platform-safe
 
 **Files:**
 
@@ -91,7 +91,7 @@ tests. Confirm the Linux build path has no Darwin-only symbols.
 **Verify:** Build the plugin set on macOS and inspect the resulting plugin
 list. No missing-plugin dependency is allowed.
 
-### 5. Add macOS non-hardware CI and documentation
+### Task 5: Add macOS non-hardware CI and documentation
 
 **Files:**
 
@@ -107,7 +107,7 @@ list. No missing-plugin dependency is allowed.
 **Verify:** YAML validation, Meson test discovery, and a clean documentation
 diff review.
 
-### 6. Review and publish the PR
+### Task 6: Review and publish the PR
 
 - Run focused tests, the complete non-hardware test suite where dependencies
   allow, and a clean macOS build.
