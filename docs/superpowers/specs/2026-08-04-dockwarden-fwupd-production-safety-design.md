@@ -10,7 +10,7 @@ The change does not add support for another dock model.
 
 ## Verified fwupd contract
 
-Dockwarden uses fwupd commit `61c7cf1873fedd78fa031e8a8829cb3413aaef46`.
+Dockwarden uses fwupd commit `74fcfabec244dc073aeb36669c5118fdfcd5107b`.
 This commit reports version `2.2.1`.
 
 `fwupdtool install FILE` can select all compatible devices. Dockwarden must not
@@ -118,7 +118,9 @@ Linux fwupd names are normalized to the same component names before this check.
 The macOS build enables upstream fwupd tests. The script starts from a fresh
 pinned source tree and a pinned Jinja2 environment. It runs the configured
 non-hardware test suite before installation. It excludes the USB backend test,
-which requires an empty physical USB bus.
+which requires an empty physical USB bus. It also excludes `fu-engine-test`:
+macOS reports the CAB fixture as `dyn.age80g2pc`, so the upstream test cannot
+select its CAB adapter.
 
 The macOS CI job installs build dependencies. It builds the pinned port, runs
 its tests, validates the full manifest, and executes read-only version and

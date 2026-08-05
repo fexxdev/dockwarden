@@ -5,6 +5,8 @@ All notable changes to `dockwarden` are recorded here.
 ## [Unreleased]
 
 - Use the fwupd Darwin branch for the managed macOS `fwupdtool` runtime.
+- Avoid the persistent Darwin HID input callback that made WD19 output reports
+  fail with macOS `kIOReturnBusy`.
 - Remove the Dockwarden Darwin patch and duplicate native Dell HID writer.
 - Read macOS dock inventory and permission state through fwupd JSON.
 - Bind the explicit install path to the read-only selected fwupd `DeviceId`.

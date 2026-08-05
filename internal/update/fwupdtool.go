@@ -20,7 +20,7 @@ const (
 	// FwupdToolEnvironmentVariable selects the standalone fwupdtool binary on macOS.
 	FwupdToolEnvironmentVariable = "DOCKWARDEN_FWUPDTOOL"
 	fwupdToolVersion             = "2.2.1"
-	fwupdSourceCommit            = "09452b3ca1d2381568b90736382e995d69f7b584"
+	fwupdSourceCommit            = "74fcfabec244dc073aeb36669c5118fdfcd5107b"
 )
 
 type CommandRunnerWithEnv interface {

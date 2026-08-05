@@ -2,7 +2,7 @@
 set -eu
 
 fwupd_version="2.2.1"
-fwupd_commit="09452b3ca1d2381568b90736382e995d69f7b584"
+fwupd_commit="74fcfabec244dc073aeb36669c5118fdfcd5107b"
 fwupd_ref="fexxdev/darwin-hid-dell-dock"
 fwupd_repo="https://github.com/fexxdev/fwupd.git"
 jinja2_version="3.1.6"
@@ -74,7 +74,11 @@ expected = {
 }
 if any(manifest.get(key) != value for key, value in expected.items()):
     raise SystemExit(1)
-if manifest.get("source_commit") not in {sys.argv[3], "61c7cf1873fedd78fa031e8a8829cb3413aaef46"}:
+if manifest.get("source_commit") not in {
+    sys.argv[3],
+    "09452b3ca1d2381568b90736382e995d69f7b584",
+    "61c7cf1873fedd78fa031e8a8829cb3413aaef46",
+}:
     raise SystemExit(1)
 if not isinstance(manifest.get("runtime_sha256"), dict):
     raise SystemExit(1)
@@ -174,7 +178,11 @@ meson_options="\
 # shellcheck disable=SC2086
 meson setup "$build_dir" "$source_dir" --prefix="$prefix" $meson_options
 meson compile -C "$build_dir"
-test_names="$(meson test -C "$build_dir" --list | awk '$0 ~ /^fwupd:/ && $0 != "fwupd:fu-usb-backend-test" {print $0}')"
+test_names="$(meson test -C "$build_dir" --list | awk '
+$0 ~ /^fwupd:/ &&
+$0 != "fwupd:fu-usb-backend-test" &&
+$0 != "fwupd:fu-engine-test" {print $0}
+')"
 if [ -z "$test_names" ]; then
 	echo "fwupd did not configure any non-hardware tests" >&2
 	exit 2
