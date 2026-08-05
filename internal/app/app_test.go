@@ -149,6 +149,68 @@ func TestRunLogsCommandLifecycle(t *testing.T) {
 	}
 }
 
+func TestRunReportsMacOSPermissionInstructions(t *testing.T) {
+	inspector := &fakeInspector{report: detectedReport()}
+	var out bytes.Buffer
+	code := Run(context.Background(), cli.Options{Command: "doctor", JSON: true}, Dependencies{
+		Inspector: inspector,
+		PermissionCheck: func(context.Context) error {
+			return errors.New("macOS denied direct HID access: IOKit 0x2c")
+		},
+		Out: &out,
+		Err: &bytes.Buffer{},
+	})
+	if code != 0 {
+		t.Fatalf("unexpected exit code: %d", code)
+	}
+	var report domain.Report
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	foundWarning := false
+	foundCheck := false
+	for _, warning := range report.Warnings {
+		if warning == "macOS HID/Input Monitoring permission is not available: macOS denied direct HID access: IOKit 0x2c. Open System Settings > Privacy & Security > Input Monitoring, enable the terminal or app that runs dockwarden, then quit and reopen it." {
+			foundWarning = true
+		}
+	}
+	for _, check := range report.Checks {
+		if check.Name == "macos_hid_permission" && check.State == "warning" {
+			foundCheck = true
+		}
+	}
+	if !foundWarning || !foundCheck {
+		t.Fatalf("permission warning/check missing: warnings=%v checks=%v", report.Warnings, report.Checks)
+	}
+}
+
+func TestRunBlocksMacOSApplyWithoutPermission(t *testing.T) {
+	inspector := &fakeInspector{report: detectedReport()}
+	updates := &fakeUpdateChecker{result: domain.UpdateCheck{State: "update_available"}}
+	updater := &fakeFirmwareUpdater{}
+	var out bytes.Buffer
+	code := Run(context.Background(), cli.Options{Command: "update", Apply: true, JSON: true}, Dependencies{
+		Inspector: inspector,
+		Updates:   updates,
+		Updater:   updater,
+		PermissionCheck: func(context.Context) error {
+			return errors.New("macOS denied direct HID access")
+		},
+		Out: &out,
+		Err: &bytes.Buffer{},
+	})
+	if code != 2 || updates.calls != 0 || updater.calls != 0 {
+		t.Fatalf("permission failure did not stop apply: code=%d updates=%d applies=%d", code, updates.calls, updater.calls)
+	}
+	var report domain.Report
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Update == nil || report.Update.State != "update_failed" {
+		t.Fatalf("expected permission failure update result: %+v", report.Update)
+	}
+}
+
 func TestRunNoDockReturnsOne(t *testing.T) {
 	inspector := &fakeInspector{report: domain.Report{
 		Platform: "darwin",

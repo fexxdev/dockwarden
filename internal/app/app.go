@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/fexxdev/dockwarden/internal/cli"
 	"github.com/fexxdev/dockwarden/internal/domain"
@@ -29,12 +30,13 @@ type FirmwareUpdaterReadiness interface {
 }
 
 type Dependencies struct {
-	Inspector Inspector
-	Updates   UpdateChecker
-	Updater   FirmwareUpdater
-	Logger    logging.Logger
-	Out       io.Writer
-	Err       io.Writer
+	Inspector       Inspector
+	Updates         UpdateChecker
+	Updater         FirmwareUpdater
+	PermissionCheck func(context.Context) error
+	Logger          logging.Logger
+	Out             io.Writer
+	Err             io.Writer
 }
 
 func Run(ctx context.Context, options cli.Options, dependencies Dependencies) int {
@@ -61,14 +63,31 @@ func Run(ctx context.Context, options cli.Options, dependencies Dependencies) in
 		"platform": report.Platform,
 		"dock":     reportDockName(report),
 	})
+	var permissionErr error
+	if dependencies.PermissionCheck != nil {
+		permissionErr = dependencies.PermissionCheck(ctx)
+		if permissionErr != nil {
+			warning := macOSPermissionWarning(permissionErr)
+			report.Warnings = append(report.Warnings, warning)
+			logEvent(dependencies.Logger, "WARN", "permissions.failed", map[string]string{"error": permissionErr.Error()})
+		}
+	}
 
 	if options.Command == "doctor" {
 		report.Checks = append(report.Checks, doctorChecks(report)...)
+		if report.Platform == "darwin" {
+			report.Checks = append(report.Checks, macOSPermissionCheck(report))
+		}
 	}
 	if options.Command == "check-updates" {
 		report.Update = checkUpdates(ctx, report, dependencies.Updates)
 	}
-	if options.Command == "update" {
+	if options.Command == "update" && options.Apply && permissionErr != nil && report.Platform == "darwin" && report.State == "detected" {
+		report.Update = &domain.UpdateCheck{
+			State:  "update_failed",
+			Reason: "macOS HID/Input Monitoring permission is required before a firmware apply: " + permissionErr.Error(),
+		}
+	} else if options.Command == "update" {
 		report.Update = runFirmwareUpdate(ctx, report, dependencies.Updates, dependencies.Updater, options.Apply)
 	}
 
@@ -106,6 +125,35 @@ func Run(ctx context.Context, options cli.Options, dependencies Dependencies) in
 		return 0
 	}
 	return 1
+}
+
+const macOSPermissionHelp = "Open System Settings > Privacy & Security > Input Monitoring, enable the terminal or app that runs dockwarden, then quit and reopen it."
+
+func macOSPermissionWarning(err error) string {
+	details := strings.TrimSpace(err.Error())
+	if details == "" {
+		details = "the HID permission probe failed"
+	}
+	if !strings.Contains(details, "Input Monitoring") {
+		details += ". " + macOSPermissionHelp
+	}
+	return "macOS HID/Input Monitoring permission is not available: " + details
+}
+
+func macOSPermissionCheck(report domain.Report) domain.Check {
+	check := domain.Check{
+		Name:    "macos_hid_permission",
+		State:   "pass",
+		Details: "read-only HID manager probe succeeded",
+	}
+	for _, warning := range report.Warnings {
+		if strings.HasPrefix(warning, "macOS HID/Input Monitoring permission is not available:") {
+			check.State = "warning"
+			check.Details = warning
+			break
+		}
+	}
+	return check
 }
 
 func logEvent(logger logging.Logger, level, event string, fields map[string]string) {

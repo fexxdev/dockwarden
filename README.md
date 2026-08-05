@@ -14,6 +14,7 @@ macOS and Linux. The current target is the Dell Dock WD19.
 
 - [Install](#install)
 - [Does it work?](#does-it-work)
+- [Recovery](#recovery)
 - [What it does](#what-it-does)
 - [Safety model](#safety-model)
 - [Firmware source](#firmware-source)
@@ -22,7 +23,7 @@ macOS and Linux. The current target is the Dell Dock WD19.
 
 ## Install
 
-The simplest installation uses the signed release checksums and the bootstrap
+The simplest installation uses the published release checksums and the bootstrap
 installer. It detects macOS or Linux and the host architecture, downloads the
 matching archive, verifies its SHA-256, and installs the binary for the current
 user.
@@ -60,15 +61,22 @@ installer, README, changelog, and license. The macOS archives also contain the
 managed `fwupd-2.2.1` prefix. Keep that complete prefix. Do not copy only its
 `fwupdtool` executable.
 
-On macOS, grant Input Monitoring permission to the terminal or application
-that runs `dockwarden`. On Linux, install `fwupdmgr` using the distribution's
-normal package manager. Dockwarden does not invoke `sudo`.
+On macOS, the installer runs a read-only HID permission check. If macOS denies
+access, it prints the exact path to the Input Monitoring setting. Open System
+Settings > Privacy & Security > Input Monitoring. Enable the terminal or app
+that runs `dockwarden`, then quit and reopen that terminal or app. The same
+check is available with `dockwarden doctor`.
+
+On Linux, the installer installs the `fwupd` package when `fwupdmgr` is
+missing. It supports `apt-get`, `dnf`, `yum`, `pacman`, and `zypper`. The
+installer can ask for `sudo`. Dockwarden itself never invokes `sudo`.
 
 Run these commands first. They are read-only:
 
 ```sh
 dockwarden --version
 dockwarden status
+dockwarden doctor
 dockwarden update
 ```
 
@@ -120,6 +128,45 @@ the end of command output. Dockwarden performs one install attempt only. It
 does not retry an install after an error; it performs a read-only verification
 instead.
 
+## Recovery
+
+Use this section after an interrupted or failed update. Keep the dock on its
+AC adapter. Prevent the computer from sleeping. Do not start a second flash
+until `dockwarden status` proves the result of the first attempt.
+
+First save a complete log and run the read-only checks:
+
+```sh
+dockwarden --log-file "$HOME/dockwarden-recovery.txt" status
+dockwarden --log-file "$HOME/dockwarden-recovery.txt" doctor
+```
+
+The following table covers every state that Dockwarden can verify:
+
+| Observed state | Safe action | Do not do |
+| --- | --- | --- |
+| `up_to_date` after reconnect | Keep the dock connected. Save the log. The candidate is not newer than the verified dock firmware. | Do not flash again to test the result. |
+| `update_failed` before any write | Keep the dock connected. Read the reason. Fix the listed preflight, permission, package, or link problem. Run `status` again. | Do not force the update or use a different package. |
+| `version_check_unavailable` | Stop. Keep the dock powered. Save the report and restore a readable USB/HID connection before any apply. | Do not treat missing versions as an update. |
+| `update_staged` or `update-pending` | Wait for the process to exit. Disconnect the USB-C cable once. Wait ten seconds. Reconnect it. Run `status`. | Do not run `update --apply` again before this check. |
+| Error during progress, such as `Writing…: 70.5%` | If progress is active, wait for the process to exit. After it exits, reconnect the USB-C cable once and run `status`. A new package and controller version confirms the write. | Do not unplug a dock while the writer is still active. Do not repeat the flash from the error message alone. |
+| `update_verified` | The candidate versions match the dock. Keep the log. No recovery action is needed. | Do not flash again. |
+| Mixed component versions | Stop. Save the log and the pre/post version report. Do not force another package. Use Dell recovery support. | Do not downgrade or skip component checks. |
+| No dock in `status` after reconnect | Remove downstream USB devices. Disconnect the host cable. Remove dock power for 30 seconds. Reconnect power first, then the host cable. Run `status` and `doctor`. | Do not run raw `fwupdtool install` commands. |
+| Dock has no LEDs or never enumerates | Repeat the power-first cycle once with another USB-C port and cable. If the dock still does not enumerate, stop software attempts. Use Dell service or a Dell recovery utility on a supported Windows system, when Dell lists one for the model. | Do not open the dock or apply an unverified image. |
+| Computer, cable, or power failed during the write | Restore stable power. Use the power-first cycle. Run `status`. Treat missing or mixed versions as an unresolved failure. | Do not assume that a completed progress bar means that every component is valid. |
+| Same failure repeats | Keep all logs and stop. Report the model, serial, versions, state, and exact error to Dell support. | Do not retry without new evidence. |
+
+If the dock enumerates and all candidate versions match, the firmware write was
+effective even if the writer returned an error. If the dock reports a pending
+state, reconnect once and verify again. If the dock does not enumerate, the
+software cannot guarantee recovery. Dell service or the official Dell recovery
+path is required.
+
+Never use a raw `fwupdtool install` command, a forced downgrade, or a CAB from
+an unknown source. Keep the recovery log because it can contain dock
+identifiers.
+
 ## What it does
 
 Dockwarden can:
@@ -149,6 +196,10 @@ single `dell_dock` DeviceId by plugin, embedded-controller instance ID, and
 `<service-tag>/<module-serial>` serial. The Dell plugin reads the hardware
 serial again immediately before its writer runs. Any failed check stops the
 install.
+
+The macOS permission probe is also fail-closed. A missing HID/Input Monitoring
+permission can report status, but it blocks `update --apply` until you enable
+the permission and restart the terminal or app.
 
 An `update_staged` result means that the platform accepted the update and
 requires a physical reconnect. Reconnect the dock USB-C cable, then run

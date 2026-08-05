@@ -49,11 +49,19 @@ sha256_file() {
 }
 
 target_os() {
-	case "$(uname -s)" in
+	case "$(platform_name)" in
 	Darwin) printf '%s\n' darwin ;;
 	Linux) printf '%s\n' linux ;;
-	*) die "unsupported operating system: $(uname -s)" ;;
+	*) die "unsupported operating system: $(platform_name)" ;;
 	esac
+}
+
+platform_name() {
+	if [ -n "${DOCKWARDEN_TEST_PLATFORM:-}" ]; then
+		printf '%s\n' "$DOCKWARDEN_TEST_PLATFORM"
+		return
+	fi
+	uname -s
 }
 
 target_arch() {
@@ -61,6 +69,53 @@ target_arch() {
 	arm64|aarch64) printf '%s\n' arm64 ;;
 	x86_64|amd64) printf '%s\n' amd64 ;;
 	*) die "unsupported architecture: $(uname -m)" ;;
+	esac
+}
+
+run_privileged() {
+	if [ "$(id -u)" -eq 0 ]; then
+		"$@"
+		return
+	fi
+	command -v sudo >/dev/null 2>&1 || die "installing fwupd needs sudo; install fwupd manually, then run the installer again"
+	sudo "$@"
+}
+
+ensure_linux_fwupd() {
+	if command -v fwupdmgr >/dev/null 2>&1; then
+		printf '%s\n' "Using fwupdmgr at $(command -v fwupdmgr)"
+		return
+	fi
+
+	printf '%s\n' 'fwupdmgr was not found; installing the fwupd package.'
+	if command -v apt-get >/dev/null 2>&1; then
+		run_privileged apt-get update
+		run_privileged apt-get install -y fwupd
+	elif command -v dnf >/dev/null 2>&1; then
+		run_privileged dnf install -y fwupd
+	elif command -v yum >/dev/null 2>&1; then
+		run_privileged yum install -y fwupd
+	elif command -v pacman >/dev/null 2>&1; then
+		run_privileged pacman -Sy --needed --noconfirm fwupd
+	elif command -v zypper >/dev/null 2>&1; then
+		run_privileged zypper --non-interactive install fwupd
+	else
+		die "cannot install fwupd automatically; install the fwupd package for this Linux distribution, then run the installer again"
+	fi
+	command -v fwupdmgr >/dev/null 2>&1 || die "fwupd installation completed but fwupdmgr is still not in PATH"
+	printf '%s\n' "Installed fwupdmgr at $(command -v fwupdmgr)"
+}
+
+run_macos_permission_check() {
+	printf '%s\n' 'Running the read-only macOS HID permission check.'
+	doctor_output="$("$1" --json doctor 2>&1 || true)"
+	if [ -n "$doctor_output" ]; then
+		printf '%s\n' "$doctor_output"
+	fi
+	case "$doctor_output" in
+		*"Input Monitoring"*|*"HID access"*)
+			printf '%s\n' 'Warning: macOS denied HID access. Open System Settings > Privacy & Security > Input Monitoring, enable the terminal or app that runs dockwarden, then quit and reopen it.' >&2
+			;;
 	esac
 }
 
@@ -84,7 +139,8 @@ install_local_archive() {
 	chmod 0755 "$binary_stage"
 	mv -f "$binary_stage" "$install_dir/dockwarden"
 
-	if [ "$(uname -s)" = "Darwin" ]; then
+	platform="$(platform_name)"
+	if [ "$platform" = "Darwin" ]; then
 		brew_path="$(command -v brew 2>/dev/null || true)"
 		if [ -z "$brew_path" ]; then
 			die "macOS needs Homebrew. Install it, then run: brew install $required_brew_formulas"
@@ -123,11 +179,18 @@ install_local_archive() {
 			rm -rf "$prefix_backup"
 			prefix_backup=""
 		fi
+	elif [ "$platform" = "Linux" ]; then
+		ensure_linux_fwupd
+	else
+		die "unsupported operating system: $platform"
 	fi
 
 	installed_version="$($install_dir/dockwarden --version 2>/dev/null || true)"
 	[ -n "$installed_version" ] || die "installed dockwarden did not report a version"
 	printf '%s\n' "Installed dockwarden $installed_version at $install_dir/dockwarden"
+	if [ "$platform" = "Darwin" ]; then
+		run_macos_permission_check "$install_dir/dockwarden"
+	fi
 	printf '%s\n' 'Next read-only check: dockwarden status'
 }
 

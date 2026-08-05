@@ -20,6 +20,9 @@ No unreleased changes yet.
 - Cross-platform CI, security guidance, contribution guidance, and project credits.
 - Prebuilt release archives for macOS arm64/amd64 and Linux amd64/arm64.
 - A checksum-verified bootstrap installer and deterministic archive packaging.
+- A read-only macOS HID permission probe and clear Input Monitoring instructions.
+- Automatic Linux `fwupd` installation through the detected distribution package manager.
+- A recovery matrix for staged, interrupted, partial, non-enumerating, and repeated-failure states.
 
 ### Changed
 
@@ -27,6 +30,7 @@ No unreleased changes yet.
 - The Windows Dell updater is never executed.
 - Release builds inject the tag version into `dockwarden --version`.
 - macOS release archives include the complete managed `fwupdtool` runtime.
+- Release installation runs a read-only macOS permission check and verifies `fwupdmgr` on Linux.
 
 ### Documentation
 

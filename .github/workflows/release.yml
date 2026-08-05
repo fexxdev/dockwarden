@@ -86,7 +86,14 @@ jobs:
               GOCACHE="$RUNNER_TEMP/go-cache" \
               go build -ldflags "-X main.version=$version" -o "$binary" ./cmd/dockwarden
           fi
-          test "$("$binary" --version)" = "$version"
+          host_goos="$(go env GOOS)"
+          host_goarch="$(go env GOARCH)"
+          if [ "$host_goos" = "${{ matrix.goos }}" ] && [ "$host_goarch" = "${{ matrix.goarch }}" ]; then
+            test "$("$binary" --version)" = "$version"
+          else
+            echo "Cross-compiled ${{ matrix.goos }}/${{ matrix.goarch }} binary; execution check skipped."
+            test -x "$binary"
+          fi
 
       - name: Package archive
         shell: bash
@@ -110,7 +117,14 @@ jobs:
           verify_dir="$RUNNER_TEMP/package-check"
           mkdir -p "$verify_dir"
           tar -xzf "$archive" -C "$verify_dir"
-          test "$("$verify_dir/dockwarden" --version)" = "${GITHUB_REF_NAME#v}"
+          host_goos="$(go env GOOS)"
+          host_goarch="$(go env GOARCH)"
+          if [ "$host_goos" = "${{ matrix.goos }}" ] && [ "$host_goarch" = "${{ matrix.goarch }}" ]; then
+            test "$("$verify_dir/dockwarden" --version)" = "${GITHUB_REF_NAME#v}"
+          else
+            echo "Cross-compiled archive; execution check skipped."
+            test -x "$verify_dir/dockwarden"
+          fi
           if [ "${{ matrix.goos }}" = darwin ]; then
             env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" LANG=C LC_ALL=C \
               "$verify_dir/fwupd-2.2.1/bin/fwupdtool" --version --json

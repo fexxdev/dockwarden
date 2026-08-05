@@ -15,6 +15,10 @@ func Open(target domain.HIDTarget) (*Device, error) {
 	return nil, fmt.Errorf("native macOS HID access requires darwin with cgo")
 }
 
+func CheckPermissions() error {
+	return nil
+}
+
 func (d *Device) SetOutputReport(report []byte) error {
 	return fmt.Errorf("native macOS HID access is unavailable")
 }

@@ -19,6 +19,7 @@ import (
 )
 
 var version = "0.3.0-dev"
+
 const wd19LinuxDriverURL = "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=389w0"
 const defaultLogFile = "dockwarden-log.txt"
 
@@ -63,6 +64,12 @@ func main() {
 		}
 		dependencies.Inspector = discovery.MacInspector{
 			Firmware: update.MacFirmwareReader{Open: openHID},
+		}
+		dependencies.PermissionCheck = func(ctx context.Context) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return hid.CheckPermissions()
 		}
 		dependencies.Updater = newDarwinFwupdToolUpdater(httpClient, openHID, logger)
 		driverURL = wd19LinuxDriverURL

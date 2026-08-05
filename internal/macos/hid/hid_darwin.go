@@ -138,6 +138,20 @@ static int dockwarden_hid_open(uint32_t vendor_id, uint32_t product_id, uint32_t
 	return status;
 }
 
+static int dockwarden_hid_check_permissions(void) {
+	IOHIDManagerRef manager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
+	if (manager == NULL) {
+		return kIOReturnNoMemory;
+	}
+	IOHIDManagerSetDeviceMatching(manager, NULL);
+	IOReturn status = IOHIDManagerOpen(manager, kIOHIDOptionsTypeNone);
+	if (status == kIOReturnSuccess) {
+		IOHIDManagerClose(manager, kIOHIDOptionsTypeNone);
+	}
+	CFRelease(manager);
+	return status;
+}
+
 typedef struct {
 	IOReturn status;
 	int done;
@@ -297,6 +311,16 @@ func Open(target domain.HIDTarget) (*Device, error) {
 		return nil, fmt.Errorf("cannot open Dell HID interface %04x:%04x at %#08x: IOKit 0x%x", target.VendorID, target.ProductID, target.LocationID, uint32(status))
 	}
 	return &Device{raw: raw, manager: manager}, nil
+}
+
+// CheckPermissions performs a read-only HID manager open. macOS returns
+// kIOReturnNotPermitted when the process lacks the required TCC permission.
+func CheckPermissions() error {
+	status := C.dockwarden_hid_check_permissions()
+	if status == C.kIOReturnSuccess {
+		return nil
+	}
+	return fmt.Errorf("macOS denied direct HID access: IOKit 0x%x", uint32(status))
 }
 
 func (d *Device) SetOutputReport(report []byte) error {
