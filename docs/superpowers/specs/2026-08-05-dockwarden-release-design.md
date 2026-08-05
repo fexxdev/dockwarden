@@ -34,6 +34,7 @@ workflow publishes:
 - `dockwarden-v0.3.0-linux-amd64.tar.gz`;
 - `dockwarden-v0.3.0-linux-arm64.tar.gz`;
 - `SHA256SUMS`;
+- `install.sh` as a standalone bootstrap installer;
 - the full `CHANGELOG.md` as release notes.
 
 Every archive contains the versioned `dockwarden` binary, `install.sh`,
@@ -47,7 +48,9 @@ managed fwupd prefix. It installs missing formulae with `brew install` when
 Homebrew is available; otherwise it stops with the exact prerequisite command.
 It copies the complete prefix to
 `~/Library/Application Support/dockwarden/fwupd-2.2.1` and never copies only
-the `fwupdtool` executable.
+the `fwupdtool` executable. The standalone `install.sh` discovers the latest
+release, verifies the selected archive against `SHA256SUMS`, extracts it, and
+then runs the archive installer.
 
 ## Versioning and build
 
