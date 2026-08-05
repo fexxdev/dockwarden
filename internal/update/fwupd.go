@@ -224,6 +224,11 @@ func isSupportedWD19(dock *domain.Dock) bool {
 	return dock != nil && dock.Model == "Dell Dock WD19" && dock.VendorID == 0x413c && dock.ProductID == 0xb06e
 }
 
+func isCABDownloadURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	return err == nil && strings.HasSuffix(strings.ToLower(parsed.Path), ".cab")
+}
+
 func isDellDownloadURL(rawURL string) bool {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.User != nil || strings.ToLower(parsed.Scheme) != "https" || parsed.Path == "" {

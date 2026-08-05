@@ -34,8 +34,8 @@ write protocol is still unknown.
 | Linux firmware read | `internal/discovery/fwupd.go` | `fwupdmgr` reports a component format that the parser does not read. |
 | Vendor metadata | `internal/dell/catalog.go` or a new vendor package | The vendor page, package format, or URL rules differ. |
 | Linux update | `internal/update/fwupd.go` | The model is supported by fwupd and needs a broader guard or a new adapter. |
-| macOS transport | `internal/macos/hid/` | The model uses macOS HID and needs an OS-specific transport. |
-| macOS protocol | `internal/update/` | The model uses a native HID, USB, I2C, serial, or vendor protocol. |
+| macOS fwupd inventory | `internal/update/fwupd_inventory.go` | The upstream fwupd plugin reports a new component or identity format. |
+| macOS vendor protocol | Upstream fwupd plugin | Prefer extending fwupd when it owns the transport and protocol. |
 | CLI wiring | `cmd/dockwarden/main.go` | Add the new catalog, backend, or model-to-backend routing. |
 | Orchestration | `internal/app/app.go` | Only when the generic command flow cannot represent the new backend. |
 
@@ -211,9 +211,9 @@ allowlist explicit.
 
 ### Native macOS update
 
-Use a new backend when the vendor has no usable macOS updater and the protocol
-is understood. Do not add a second vendor protocol to `internal/update/macos.go`.
-That file contains the WD19 protocol and its component layout.
+Use a new backend only when the vendor has no usable fwupd macOS plugin and the
+protocol is understood. Do not copy a protocol that is already implemented in
+fwupd. Add the support to the upstream plugin first.
 
 Create a separate protocol file, for example:
 
@@ -228,17 +228,9 @@ Keep the protocol layer pure Go when possible. It should translate typed
 operations into HID or USB reports and validate response sizes. Test packet
 bytes with fake report devices.
 
-Keep Apple API calls in `internal/macos/hid/`. The existing transport exposes:
-
-```go
-type HIDConnection interface {
-    HIDReports
-    Close()
-}
-```
-
-If the new dock uses another transport, add a small OS adapter instead of
-putting cgo calls into the protocol or application layer.
+Keep Apple API calls in the upstream fwupd Darwin transport. Dockwarden should
+consume its read-only JSON inventory and pass the selected fwupd `DeviceId` to
+the explicit writer.
 
 ## Step 7: implement read-only firmware inspection first
 
@@ -255,9 +247,9 @@ component versions. Validate:
 Return an error when a version is missing or malformed. Do not silently treat a
 missing version as zero.
 
-The current WD19 updater reads its state through `DellHID.ReadDockData`,
-`DellHID.ReadDockInfo`, and `DellHID.ReadUpdateStatus`. A different dock should
-have equivalent methods in its own protocol type.
+The WD19 inventory reads component state through
+`fwupdtool --plugins dell_dock --json get-devices`. A different dock should
+provide an upstream fwupd JSON fixture before Dockwarden adds model mapping.
 
 ## Step 8: build the update plan before the first write
 
@@ -336,8 +328,8 @@ Every new model should add tests for:
 - activation failure;
 - cancellation through `context.Context`.
 
-Use fake command runners, HTTP clients, firmware extractors, and HID devices.
-Tests must not need a physical dock and must not download firmware.
+Use fake fwupd command runners, HTTP clients, and firmware metadata. Tests must
+not need a physical dock and must not download firmware.
 
 Run the full checks:
 

@@ -62,11 +62,11 @@ installer, README, changelog, and license. The macOS archives also contain the
 managed `fwupd-2.2.1` prefix. Keep that complete prefix. Do not copy only its
 `fwupdtool` executable.
 
-On macOS, the installer runs a read-only HID permission check. If macOS denies
-access, it prints the exact path to the Input Monitoring setting. Open System
-Settings > Privacy & Security > Input Monitoring. Enable the terminal or app
-that runs `dockwarden`, then quit and reopen that terminal or app. The same
-check is available with `dockwarden doctor`.
+On macOS, the installer runs a read-only fwupd HID permission check. If macOS
+denies access, it prints the exact path to the Input Monitoring setting. Open
+System Settings > Privacy & Security > Input Monitoring. Enable the terminal
+or app that runs `dockwarden`, then quit and reopen that terminal or app. The
+same check is available with `dockwarden doctor`.
 
 On Linux, the installer installs the `fwupd` package when `fwupdmgr` is
 missing. It supports `apt-get`, `dnf`, `yum`, `pacman`, and `zypper`. The
@@ -229,16 +229,17 @@ Dockwarden can:
 
 - identify the WD19 USB device and its topology;
 - report USB, Ethernet, audio, and downstream USB services;
-- read component firmware versions through native HID on macOS;
+- read component firmware versions through the upstream fwupd Dell plugin on
+  macOS;
 - check official Dell firmware metadata and the pinned CAB checksum;
 - create a read-only update plan;
 - update the WD19 through `fwupdmgr` on Linux;
 - update the WD19 through the upstream standalone `fwupdtool` on macOS.
 
-The macOS writer uses the upstream Dell Dock plugin with libusb enumeration
-and an Apple IOHIDManager transport for HID reports. Dockwarden selects one
-exact WD19 DeviceId, checks the serial in the same process, and verifies every
-candidate component after the install.
+The macOS inventory and writer use the upstream Dell Dock plugin from the
+fwupd Darwin branch. That plugin owns the Apple HID transport and the Dell
+protocol. Dockwarden selects one exact WD19 DeviceId from JSON, compares the
+USB serial, and verifies every candidate component after the install.
 
 Dockwarden does not execute Dell Windows `.exe` packages. It does not accept
 arbitrary payloads, forced downgrades, or unverified firmware files. A USB
@@ -246,12 +247,11 @@ descriptor version is not a firmware version.
 
 ## Safety model
 
-Before an install, macOS checks the dock identity, board, power state, update
-state, five component versions, CAB members, and the MST policy. It selects a
-single `dell_dock` DeviceId by plugin, embedded-controller instance ID, and
-`<service-tag>/<module-serial>` serial. The Dell plugin reads the hardware
-serial again immediately before its writer runs. Any failed check stops the
-install.
+Before an install, macOS checks the dock identity, one fwupd target, update
+state, and all five component versions from a read-only JSON inventory. It
+selects a single `dell_dock` DeviceId by plugin, embedded-controller instance
+ID, and the USB serial prefix. The upstream Dell plugin owns the hardware
+checks and write protocol. Any failed check stops the install.
 
 The macOS permission probe is also fail-closed. A missing HID/Input Monitoring
 permission can report status, but it blocks `update --apply` until you enable
@@ -309,12 +309,13 @@ sh tools/release/install_test.sh
 sh tools/release/package_test.sh
 ```
 
-The macOS fwupd port is built from the pinned upstream commit. See
+The macOS fwupd port is built from the pinned Darwin branch commit. See
 [the macOS build guide](tools/fwupd-macos/README.md). The build runs upstream
 non-hardware tests and does not update a dock.
 
-Tests use fake HID, HTTP, and command interfaces. They never flash a physical
-dock. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
+Tests use fake fwupd, HTTP, and command interfaces. They never flash a
+physical dock. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development
+workflow.
 
 ## Documentation and credits
 

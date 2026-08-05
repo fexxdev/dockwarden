@@ -1,14 +1,10 @@
 # macOS fwupdtool build
 
-This directory builds upstream fwupd's standalone Dell Dock tool.
-The build uses fwupd commit `61c7cf1873fedd78fa031e8a8829cb3413aaef46`.
-That commit reports fwupd version 2.2.1.
-
-The script applies the pinned Darwin patch in `patches/`.
-The patch routes HID reports through Apple's IOHIDManager.
-This avoids the libusb interface claim used on Linux. It reopens the HID
-device after a transient disconnect or re-enumeration before retrying one
-report, so a dock restart does not leave a stale handle in the writer.
+This directory builds the standalone Dell Dock tool from the fwupd Darwin
+branch `fexxdev/darwin-hid-dell-dock` at commit
+`09452b3ca1d2381568b90736382e995d69f7b584`.
+The commit reports fwupd version 2.2.1 and contains the Darwin HID transport.
+Dockwarden does not carry a second HID transport or Dell protocol writer.
 
 The build needs Apple Silicon Homebrew and these packages:
 
@@ -31,14 +27,14 @@ The default binary path is:
 Pass an absolute prefix as the first argument to build elsewhere. The path must
 end in `dockwarden/fwupd-2.2.1`. The script replaces only a prefix that has its
 ownership marker or a valid legacy manifest. It installs the complete prefix
-and writes `manifest.json`. The manifest records
-the fwupd version, source commit, Darwin patch SHA-256, and SHA-256 for every
-runtime file under `bin`, `etc/fwupd`, `lib`, and `share/fwupd`. Dockwarden
-verifies the complete file set before it accesses the network.
+and writes `manifest.json`. The manifest records the fwupd version, source
+commit, and SHA-256 for every runtime file under `bin`, `etc/fwupd`, `lib`, and
+`share/fwupd`. Dockwarden verifies the complete file set before it accesses
+the network.
 
-The script creates a fresh source tree at the pinned commit. It applies only the
-verified Darwin patch. It uses Jinja2 3.1.6 in a fresh virtual environment. It
-then builds fwupdtool and runs the enabled upstream non-hardware test suite. It
+The script creates a fresh source tree from the pinned branch and checks the
+resolved commit. It uses Jinja2 3.1.6 in a fresh virtual environment. It then
+builds fwupdtool and runs the enabled upstream non-hardware test suite. It
 excludes `fu-usb-backend-test`. That test expects an empty USB bus and fails
 when the Mac has attached USB devices. The script does not update firmware or
 access a dock.

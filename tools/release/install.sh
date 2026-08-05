@@ -107,7 +107,7 @@ ensure_linux_fwupd() {
 }
 
 run_macos_permission_check() {
-	printf '%s\n' 'Running the read-only macOS HID permission check.'
+	printf '%s\n' 'Running the read-only macOS fwupd HID permission check.'
 	doctor_output="$("$1" --json doctor 2>&1 || true)"
 	if [ -n "$doctor_output" ]; then
 		printf '%s\n' "$doctor_output"

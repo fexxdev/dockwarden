@@ -13,14 +13,13 @@ The project uses these external references and system components:
   official package metadata and firmware payload source.
 - [Dell WD19 Administrator Guide](https://www.dell.com/support/manuals/en-us/dell-wd19-130w-dock/wd19_administrator_guide/updating-the-firmware):
   vendor update guidance.
-- [Apple IOKit and CoreFoundation](https://developer.apple.com/documentation/iokit):
-  macOS system frameworks used for HID access.
+- [Apple IOKit](https://developer.apple.com/documentation/iokit):
+  macOS system framework used by the fwupd Darwin HID transport.
 - [libusb](https://libusb.info/): the macOS USB backend used by the standalone
   fwupdtool build.
 - [Meson](https://mesonbuild.com/), [Ninja](https://ninja-build.org/), and
   [Rust](https://www.rust-lang.org/): tools used to build upstream fwupdtool.
 - [Go](https://go.dev/): the language and standard library.
-- `bsdtar`/libarchive: retained by the native HID protocol regression path.
 
 Dell, WD19, fwupd, Apple, macOS, and Go are trademarks or project names owned
 by their respective holders. This project is not affiliated with Dell, Apple,

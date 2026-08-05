@@ -2,18 +2,13 @@
 set -eu
 
 fwupd_version="2.2.1"
-fwupd_commit="61c7cf1873fedd78fa031e8a8829cb3413aaef46"
-darwin_patch_sha256="b98adbdd79b15b54df3066e27f616d976484f916527517cc8b6007f7ef2a7fb9"
-# This is the previous Dockwarden-managed patch. It is accepted only to
-# replace that exact legacy prefix with the current verified build.
-legacy_darwin_patch_sha256="1368ab6e7d9a15cb5e9d3a6e07f12b521996a72831f709078b0b2fbbe847d8fb"
-fwupd_repo="https://github.com/fwupd/fwupd.git"
+fwupd_commit="09452b3ca1d2381568b90736382e995d69f7b584"
+fwupd_ref="fexxdev/darwin-hid-dell-dock"
+fwupd_repo="https://github.com/fexxdev/fwupd.git"
 jinja2_version="3.1.6"
 markupsafe_version="3.0.3"
 cache_root="${DOCKWARDEN_FWUPD_CACHE_DIR:-${TMPDIR:-/tmp}/dockwarden-fwupd}"
 prefix="${1:-$HOME/Library/Application Support/dockwarden/fwupd-$fwupd_version}"
-script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
-patch_file="$script_dir/patches/0001-darwin-iohid-hid-device.patch"
 work_dir=""
 stage_root=""
 backup_prefix=""
@@ -68,7 +63,7 @@ if [ -e "$prefix" ] || [ -L "$prefix" ]; then
 		[ "$(sed -n '1p' "$prefix/$managed_marker_name" 2>/dev/null || true)" != "$managed_marker_value" ]; then
 		legacy_manifest="$prefix/manifest.json"
 		if [ ! -f "$legacy_manifest" ] || [ -L "$legacy_manifest" ] ||
-		! python3 - "$legacy_manifest" "$fwupd_version" "$fwupd_commit" "$darwin_patch_sha256" "$legacy_darwin_patch_sha256" <<'PY'
+		! python3 - "$legacy_manifest" "$fwupd_version" "$fwupd_commit" <<'PY'
 import json
 import pathlib
 import sys
@@ -76,9 +71,10 @@ import sys
 manifest = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 expected = {
     "fwupd_version": sys.argv[2],
-    "source_commit": sys.argv[3],
 }
-if any(manifest.get(key) != value for key, value in expected.items()) or manifest.get("darwin_patch_sha256") not in sys.argv[4:6]:
+if any(manifest.get(key) != value for key, value in expected.items()):
+    raise SystemExit(1)
+if manifest.get("source_commit") not in {sys.argv[3], "61c7cf1873fedd78fa031e8a8829cb3413aaef46"}:
     raise SystemExit(1)
 if not isinstance(manifest.get("runtime_sha256"), dict):
     raise SystemExit(1)
@@ -97,17 +93,6 @@ require_command ninja
 require_command pkg-config
 require_command rustc
 require_command cargo
-require_command shasum
-
-if [ ! -f "$patch_file" ]; then
-	echo "missing fwupd Darwin patch: $patch_file" >&2
-	exit 2
-fi
-actual_patch_sha256="$(shasum -a 256 "$patch_file" | awk '{print $1}')"
-if [ "$actual_patch_sha256" != "$darwin_patch_sha256" ]; then
-	echo "fwupd Darwin patch SHA-256 mismatch: $actual_patch_sha256" >&2
-	exit 2
-fi
 
 for formula in gcab glib gnutls json-glib libjcat libusb libxmlb; do
 	if ! brew list --versions "$formula" >/dev/null 2>&1; then
@@ -125,21 +110,15 @@ venv_dir="$work_dir/venv"
 
 git init -q "$source_dir"
 git -C "$source_dir" remote add origin "$fwupd_repo"
-git -C "$source_dir" fetch --depth=1 origin "$fwupd_commit"
+git -C "$source_dir" fetch --depth=1 origin "$fwupd_ref"
 git -C "$source_dir" checkout --detach FETCH_HEAD
 if ! git -C "$source_dir" diff --quiet HEAD -- || ! git -C "$source_dir" diff --cached --quiet HEAD --; then
 	echo "fresh fwupd source is not clean" >&2
 	exit 2
 fi
-if git -C "$source_dir" apply --check "$patch_file" >/dev/null 2>&1; then
-	git -C "$source_dir" apply "$patch_file"
-else
-	echo "cannot apply the fwupd Darwin patch to $source_dir" >&2
-	exit 2
-fi
-if ! git -C "$source_dir" apply --reverse --check "$patch_file" >/dev/null 2>&1 ||
-	! git -C "$source_dir" diff --check; then
-	echo "fwupd source does not contain only a cleanly applicable Darwin patch" >&2
+actual_source_commit="$(git -C "$source_dir" rev-parse HEAD)"
+if [ "$actual_source_commit" != "$fwupd_commit" ]; then
+	echo "fwupd branch resolved to $actual_source_commit, expected $fwupd_commit" >&2
 	exit 2
 fi
 
@@ -211,7 +190,7 @@ if [ ! -x "$tool_path" ]; then
 	echo "fwupdtool was not installed at $tool_path" >&2
 	exit 2
 fi
-"$python3_bin" - "$staged_prefix" "$fwupd_version" "$fwupd_commit" "$darwin_patch_sha256" <<'PY'
+"$python3_bin" - "$staged_prefix" "$fwupd_version" "$fwupd_commit" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -245,7 +224,6 @@ for relative_path in required:
 manifest = {
     "fwupd_version": sys.argv[2],
     "source_commit": sys.argv[3],
-    "darwin_patch_sha256": sys.argv[4],
     "binary_sha256": hashes["bin/fwupdtool"],
     "runtime_sha256": hashes,
 }

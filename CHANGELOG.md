@@ -4,7 +4,12 @@ All notable changes to `dockwarden` are recorded here.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+- Use the fwupd Darwin branch for the managed macOS `fwupdtool` runtime.
+- Remove the Dockwarden Darwin patch and duplicate native Dell HID writer.
+- Read macOS dock inventory and permission state through fwupd JSON.
+- Bind the explicit install path to the read-only selected fwupd `DeviceId`.
+- Add tests for serial matching, component inventory, version comparison, and
+  read-only preflight.
 
 ## [0.3.0] - 2026-08-05
 

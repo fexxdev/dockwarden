@@ -20,9 +20,7 @@ const (
 	// FwupdToolEnvironmentVariable selects the standalone fwupdtool binary on macOS.
 	FwupdToolEnvironmentVariable = "DOCKWARDEN_FWUPDTOOL"
 	fwupdToolVersion             = "2.2.1"
-	fwupdSourceCommit            = "61c7cf1873fedd78fa031e8a8829cb3413aaef46"
-	fwupdDarwinPatchSHA256       = "b98adbdd79b15b54df3066e27f616d976484f916527517cc8b6007f7ef2a7fb9"
-	fwupdExpectedSerialEnv       = "DOCKWARDEN_EXPECTED_DELL_DOCK_SERIAL"
+	fwupdSourceCommit            = "09452b3ca1d2381568b90736382e995d69f7b584"
 )
 
 type CommandRunnerWithEnv interface {
@@ -30,7 +28,7 @@ type CommandRunnerWithEnv interface {
 }
 
 type MacPreflighter interface {
-	Check(context.Context, *domain.Dock, string) (MacPreflightResult, error)
+	Check(context.Context, *domain.Dock, *domain.FirmwareCandidate) (MacPreflightResult, error)
 }
 
 type FwupdToolUpdater struct {
@@ -44,11 +42,10 @@ type FwupdToolUpdater struct {
 }
 
 type fwupdToolManifest struct {
-	FwupdVersion      string            `json:"fwupd_version"`
-	SourceCommit      string            `json:"source_commit"`
-	DarwinPatchSHA256 string            `json:"darwin_patch_sha256"`
-	BinarySHA256      string            `json:"binary_sha256"`
-	RuntimeSHA256     map[string]string `json:"runtime_sha256"`
+	FwupdVersion  string            `json:"fwupd_version"`
+	SourceCommit  string            `json:"source_commit"`
+	BinarySHA256  string            `json:"binary_sha256"`
+	RuntimeSHA256 map[string]string `json:"runtime_sha256"`
 }
 
 type fwupdToolVersionOutput struct {
@@ -208,26 +205,19 @@ func (u FwupdToolUpdater) Apply(ctx context.Context, dock *domain.Dock, candidat
 
 	preflight := u.Preflight
 	if preflight == nil {
-		return failed(candidate, "macOS native preflight is not configured")
+		return failed(candidate, "macOS fwupd preflight is not configured")
 	}
 	return u.applyWithTarget(ctx, dock, candidate, runner, env, toolPath, preflight)
 }
 
 func (u FwupdToolUpdater) applyWithTarget(ctx context.Context, dock *domain.Dock, candidate *domain.FirmwareCandidate, runner CommandRunner, env []string, toolPath string, preflight MacPreflighter) domain.UpdateCheck {
-	payloadPath, err := (FwupdUpdater{HTTP: u.HTTP, TempDir: u.TempDir, Logger: u.Logger}).download(ctx, candidate)
-	if err != nil {
-		return failed(candidate, err.Error())
-	}
-	defer os.Remove(payloadPath)
-
-	result, err := preflight.Check(ctx, dock, payloadPath)
+	result, err := preflight.Check(ctx, dock, candidate)
 	if err != nil {
 		return failed(candidate, err.Error())
 	}
 	logUpdateEvent(u.Logger, "INFO", "macos.preflight.complete", map[string]string{
-		"service_tag":   result.ServiceTag,
-		"module_serial": fmt.Sprintf("%d", result.ModuleSerial),
-		"update":        fmt.Sprintf("%t", result.UpdateAvailable),
+		"device": result.DeviceID,
+		"update": fmt.Sprintf("%t", result.UpdateAvailable),
 	})
 	if !result.UpdateAvailable {
 		return domain.UpdateCheck{
@@ -237,11 +227,15 @@ func (u FwupdToolUpdater) applyWithTarget(ctx context.Context, dock *domain.Dock
 			Candidate: candidate,
 		}
 	}
-	expectedSerial := fwupdSerial(result.ServiceTag, result.ModuleSerial)
-	deviceID, err := selectFwupdWD19Device(ctx, runner, env, toolPath, expectedSerial, u.Logger)
+	if !fwupdDeviceIDPattern.MatchString(result.DeviceID) {
+		return failed(candidate, "fwupd preflight returned an invalid WD19 DeviceId")
+	}
+	payloadPath, err := (FwupdUpdater{HTTP: u.HTTP, TempDir: u.TempDir, Logger: u.Logger}).download(ctx, candidate)
 	if err != nil {
 		return failed(candidate, err.Error())
 	}
+	defer os.Remove(payloadPath)
+
 	args := []string{
 		"--plugins",
 		"dell_dock",
@@ -249,16 +243,14 @@ func (u FwupdToolUpdater) applyWithTarget(ctx context.Context, dock *domain.Dock
 		"--no-reboot-check",
 		"install",
 		payloadPath,
-		deviceID,
+		result.DeviceID,
 	}
-	installEnv := append([]string(nil), env...)
-	installEnv = append(installEnv, fwupdExpectedSerialEnv+"="+expectedSerial)
-	output, err := runLoggedFwupdCommand(ctx, runner, installEnv, toolPath, u.Logger, args...)
+	output, err := runLoggedFwupdCommand(ctx, runner, env, toolPath, u.Logger, args...)
 	logUpdateEvent(u.Logger, commandLogLevel(err), "fwupdtool.target.result", map[string]string{
-		"device": deviceID,
+		"device": result.DeviceID,
 		"error":  errorText(err),
 	})
-	postInstall, postInstallErr := fwupdPostInstallVerification(ctx, runner, env, toolPath, deviceID, candidate, u.Logger)
+	postInstall, postInstallErr := fwupdPostInstallVerification(ctx, runner, env, toolPath, result.DeviceID, candidate, u.Logger)
 	if err != nil {
 		if postInstallErr == nil && postInstall.State == fwupdPostInstallVerified {
 			reason := "fwupdtool returned an error after the candidate versions were verified on the dock: " + err.Error()
@@ -329,14 +321,18 @@ func (u FwupdToolUpdater) applyWithTarget(ctx context.Context, dock *domain.Dock
 }
 
 func (u FwupdToolUpdater) resolveToolPath() (string, error) {
-	toolPath := strings.TrimSpace(u.ToolPath)
+	return resolveFwupdToolPath(u.ToolPath, u.ConfigDir)
+}
+
+func resolveFwupdToolPath(toolOverride, configuredDir string) (string, error) {
+	toolPath := strings.TrimSpace(toolOverride)
 	if toolPath != "" {
 		if !filepath.IsAbs(toolPath) {
 			return "", fmt.Errorf("%s must be an absolute path", FwupdToolEnvironmentVariable)
 		}
 		return filepath.Clean(toolPath), nil
 	}
-	configDir := strings.TrimSpace(u.ConfigDir)
+	configDir := strings.TrimSpace(configuredDir)
 	if configDir == "" {
 		var err error
 		configDir, err = os.UserConfigDir()
@@ -380,7 +376,7 @@ func verifyFwupdTool(toolPath string) error {
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		return fmt.Errorf("cannot parse fwupdtool manifest: %w", err)
 	}
-	if manifest.FwupdVersion != fwupdToolVersion || manifest.SourceCommit != fwupdSourceCommit || manifest.DarwinPatchSHA256 != fwupdDarwinPatchSHA256 {
+	if manifest.FwupdVersion != fwupdToolVersion || manifest.SourceCommit != fwupdSourceCommit {
 		return fmt.Errorf("fwupdtool manifest does not match the managed fwupd 2.2.1 build")
 	}
 	if !isSHA256(manifest.BinarySHA256) {
@@ -531,34 +527,6 @@ func verifyFwupdToolVersion(ctx context.Context, runner CommandRunner, env []str
 	return nil
 }
 
-func selectFwupdWD19Device(ctx context.Context, runner CommandRunner, env []string, toolPath, serial string, logger logging.Logger) (string, error) {
-	devices, err := readFwupdDevices(ctx, runner, env, toolPath, logger)
-	if err != nil {
-		return "", err
-	}
-	matches := make([]fwupdToolDevice, 0, 1)
-	for _, device := range devices {
-		if device.Plugin != "dell_dock" || device.Serial != serial || !hasWD19EmbeddedInstanceID(device.InstanceIDs) {
-			continue
-		}
-		if !fwupdDeviceIDPattern.MatchString(device.DeviceID) {
-			return "", fmt.Errorf("matching WD19 device has an invalid DeviceId")
-		}
-		matches = append(matches, device)
-	}
-	if len(matches) == 0 {
-		return "", fmt.Errorf("no matching WD19 device was reported by fwupdtool")
-	}
-	if len(matches) != 1 {
-		return "", fmt.Errorf("multiple matching WD19 devices were reported by fwupdtool")
-	}
-	logUpdateEvent(logger, "INFO", "fwupd.target.selected", map[string]string{
-		"device": matches[0].DeviceID,
-		"serial": serial,
-	})
-	return matches[0].DeviceID, nil
-}
-
 func readFwupdDevices(ctx context.Context, runner CommandRunner, env []string, toolPath string, logger logging.Logger) ([]fwupdToolDevice, error) {
 	args := []string{"--plugins", "dell_dock", "--json", "get-devices"}
 	output, err := runLoggedFwupdCommand(ctx, runner, env, toolPath, logger, args...)
@@ -678,10 +646,6 @@ func hasWD19EmbeddedInstanceID(instanceIDs []string) bool {
 		}
 	}
 	return false
-}
-
-func fwupdSerial(serviceTag string, moduleSerial uint64) string {
-	return fmt.Sprintf("%s/%08d", strings.TrimSpace(serviceTag), moduleSerial)
 }
 
 func commandError(command string, output []byte, err error) error {

@@ -14,15 +14,17 @@ not execute Dell Windows packages or accept arbitrary local firmware files.
 The macOS production writer delegates to the pinned upstream Dell Dock plugin
 in standalone `fwupdtool`. Before network access, Dockwarden verifies the
 managed runtime file set, file modes, hashes, and fwupd 2.2.1 compile/runtime
-versions. It gives fwupd a minimal environment. The native HID code performs a
-read-only WD19 preflight before the writer can run. Review the plan with
-`dockwarden update` before using `dockwarden update --apply`.
+versions. It gives fwupd a minimal environment. The upstream Dell plugin
+performs the HID and Dell protocol work. Dockwarden reads a JSON inventory and
+performs a read-only target and version preflight before the writer can run.
+Review the plan with `dockwarden update`. Use `dockwarden update --apply` only
+after that review.
 
 Dockwarden selects one `dell_dock` device by its WD19 embedded-controller
-instance ID and HID-derived serial. It passes the full DeviceId to fwupdtool.
-The Dell plugin then reads and compares the hardware serial again in the same
-fwupd process before writing. Missing, multiple, malformed, or changed targets
-stop the update. A newer MST payload also stops both macOS writers.
+instance ID and USB serial prefix. It passes the full DeviceId to fwupdtool.
+Missing, multiple, malformed, or changed targets stop the update. The upstream
+plugin then owns the HID selection and hardware validation in the fwupd
+process.
 
 An `update_staged` result is not proof that the final firmware is active.
 Unplug and reconnect the dock, then run `dockwarden status`. `update_verified`

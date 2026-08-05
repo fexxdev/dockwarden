@@ -14,7 +14,6 @@ import (
 	"github.com/fexxdev/dockwarden/internal/discovery"
 	"github.com/fexxdev/dockwarden/internal/domain"
 	"github.com/fexxdev/dockwarden/internal/logging"
-	"github.com/fexxdev/dockwarden/internal/macos/hid"
 	"github.com/fexxdev/dockwarden/internal/update"
 )
 
@@ -59,19 +58,17 @@ func main() {
 	driverURL := wd19LinuxDriverURL
 	switch runtime.GOOS {
 	case "darwin":
-		openHID := func(target domain.HIDTarget) (update.HIDConnection, error) {
-			return hid.Open(target)
+		fwupdClient := update.FwupdToolClient{
+			ToolPath: os.Getenv(update.FwupdToolEnvironmentVariable),
+			Logger:   logger,
 		}
 		dependencies.Inspector = discovery.MacInspector{
-			Firmware: update.MacFirmwareReader{Open: openHID},
+			Firmware: update.FwupdToolFirmwareReader{Client: fwupdClient},
 		}
 		dependencies.PermissionCheck = func(ctx context.Context) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			return hid.CheckPermissions()
+			return (update.FwupdToolPermissionChecker{Client: fwupdClient}).Check(ctx)
 		}
-		dependencies.Updater = newDarwinFwupdToolUpdater(httpClient, openHID, logger)
+		dependencies.Updater = newDarwinFwupdToolUpdater(httpClient, fwupdClient)
 		driverURL = wd19LinuxDriverURL
 	case "linux":
 		dependencies.Inspector = discovery.LinuxInspector{}
@@ -94,17 +91,14 @@ func main() {
 	os.Exit(app.Run(context.Background(), options, dependencies))
 }
 
-func newDarwinFwupdToolUpdater(httpClient *http.Client, openHID update.HIDOpener, loggers ...logging.Logger) update.FwupdToolUpdater {
-	var logger logging.Logger
-	if len(loggers) > 0 {
-		logger = loggers[0]
-	}
+func newDarwinFwupdToolUpdater(httpClient *http.Client, client update.FwupdToolClient) update.FwupdToolUpdater {
 	return update.FwupdToolUpdater{
-		HTTP:     httpClient,
-		ToolPath: os.Getenv(update.FwupdToolEnvironmentVariable),
-		Logger:   logger,
-		Preflight: update.MacPreflightReader{
-			Open: openHID,
-		},
+		HTTP:      httpClient,
+		Runner:    client.Runner,
+		ToolPath:  client.ToolPath,
+		ConfigDir: client.ConfigDir,
+		TempDir:   client.TempDir,
+		Logger:    client.Logger,
+		Preflight: update.FwupdToolPreflight{Client: client},
 	}
 }

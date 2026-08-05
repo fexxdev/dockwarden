@@ -83,9 +83,13 @@ func Run(ctx context.Context, options cli.Options, dependencies Dependencies) in
 		report.Update = checkUpdates(ctx, report, dependencies.Updates)
 	}
 	if options.Command == "update" && options.Apply && permissionErr != nil && report.Platform == "darwin" && report.State == "detected" {
+		reason := "macOS fwupd inventory check is required before a firmware apply: " + permissionErr.Error()
+		if isMacOSPermissionError(permissionErr) {
+			reason = "macOS HID/Input Monitoring permission is required before a firmware apply: " + permissionErr.Error()
+		}
 		report.Update = &domain.UpdateCheck{
 			State:  "update_failed",
-			Reason: "macOS HID/Input Monitoring permission is required before a firmware apply: " + permissionErr.Error(),
+			Reason: reason,
 		}
 	} else if options.Command == "update" {
 		report.Update = runFirmwareUpdate(ctx, report, dependencies.Updates, dependencies.Updater, options.Apply)
@@ -134,20 +138,44 @@ func macOSPermissionWarning(err error) string {
 	if details == "" {
 		details = "the HID permission probe failed"
 	}
+	if !isMacOSPermissionError(err) {
+		return "macOS fwupd inventory check is not available: " + details
+	}
 	if !strings.Contains(details, "Input Monitoring") {
 		details += ". " + macOSPermissionHelp
 	}
 	return "macOS HID/Input Monitoring permission is not available: " + details
 }
 
+func isMacOSPermissionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	details := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"input monitoring",
+		"permission",
+		"access denied",
+		"not permitted",
+		"not authorized",
+		"hid access",
+	} {
+		if strings.Contains(details, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func macOSPermissionCheck(report domain.Report) domain.Check {
 	check := domain.Check{
 		Name:    "macos_hid_permission",
 		State:   "pass",
-		Details: "read-only HID manager probe succeeded",
+		Details: "read-only fwupd HID inventory probe succeeded",
 	}
 	for _, warning := range report.Warnings {
-		if strings.HasPrefix(warning, "macOS HID/Input Monitoring permission is not available:") {
+		if strings.HasPrefix(warning, "macOS HID/Input Monitoring permission is not available:") ||
+			strings.HasPrefix(warning, "macOS fwupd inventory check is not available:") {
 			check.State = "warning"
 			check.Details = warning
 			break
