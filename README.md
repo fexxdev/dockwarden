@@ -1,176 +1,167 @@
 # dockwarden
 
-`dockwarden` is a command-line utility for Dell docking stations on macOS and
-Linux. The current target is the Dell Dock WD19.
+`dockwarden` is a safety-first command-line tool for Dell docking stations on
+macOS and Linux. The current target is the Dell Dock WD19.
 
-> A safety-first firmware control plane for the dock between your laptop,
-> displays, and last good USB-C cable.
-
-> **Use at your own risk.** Firmware updates can leave a dock unusable if power or USB
-> connectivity is lost. Read the plan before applying an update, and keep the dock on
-> stable power.
+> **Safety notice:** Firmware updates can leave a dock unusable if power or
+> USB-C connectivity is lost. Review the read-only plan first. Keep the dock
+> on stable power. Never run an unattended firmware update.
 
 [![CI](https://github.com/fexxdev/dockwarden/actions/workflows/ci.yml/badge.svg)](https://github.com/fexxdev/dockwarden/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## What it does
+**Contents**
 
-The utility can:
-
-- identify the WD19 USB device and its topology;
-- report USB, Ethernet, audio, and downstream USB enumeration;
-- check official Dell firmware metadata;
-- update the WD19 through `fwupdmgr` on Linux;
-- update the WD19 through upstream `fwupdtool` on macOS.
-
-The macOS status reader uses direct HID access. The macOS write path uses the
-upstream Dell Dock plugin in standalone `fwupdtool`, with libusb enumeration
-and an IOHIDManager transport for HID reports.
-
-The utility does not execute Dell Windows `.exe` packages. It does not accept
-arbitrary payloads, forced downgrades, or unverified firmware files.
-
-A USB descriptor version is not a firmware version.
+- [Install](#install)
+- [Does it work?](#does-it-work)
+- [What it does](#what-it-does)
+- [Safety model](#safety-model)
+- [Firmware source](#firmware-source)
+- [Development](#development)
+- [Documentation and credits](#documentation-and-credits)
 
 ## Install
 
-Build a native binary with Go 1.22 or newer:
+The simplest installation uses the signed release checksums and the bootstrap
+installer. It detects macOS or Linux and the host architecture, downloads the
+matching archive, verifies its SHA-256, and installs the binary for the current
+user.
 
 ```sh
-go build -o dockwarden ./cmd/dockwarden
+curl -fsSL https://github.com/fexxdev/dockwarden/releases/latest/download/install.sh | sh
 ```
 
-On macOS, build with cgo enabled. The status reader uses IOKit and
-CoreFoundation. Build the upstream `fwupdtool` port first; see
-[the macOS build guide](tools/fwupd-macos/README.md). Dockwarden uses the
-managed tool at
-`~/Library/Application Support/dockwarden/fwupd-2.2.1/bin/fwupdtool`.
-`DOCKWARDEN_FWUPDTOOL` can override it with an absolute path. Dockwarden never
-searches `PATH` for a firmware writer. macOS may require HID or Input Monitoring
-permission for the terminal. If `status` reports denied HID access, grant that
-permission and run it again.
+The installer places `dockwarden` in `$HOME/.local/bin`. Add that directory to
+`PATH` if it is not already present. On macOS, the installer also installs the
+complete managed `fwupdtool` runtime and checks the required Homebrew formulae.
+If Homebrew is not installed, the installer prints the exact prerequisite
+command and stops. It never writes firmware.
 
-On Linux, install `fwupdmgr` and use the privilege model configured by the
-system. `dockwarden` does not invoke `sudo`.
-
-## Commands
-
-Inspect the dock:
+To install a specific release, pin the tag:
 
 ```sh
-./dockwarden scan
-./dockwarden status
-./dockwarden doctor
+curl -fsSL https://github.com/fexxdev/dockwarden/releases/latest/download/install.sh \
+  | DOCKWARDEN_VERSION=v0.3.0 sh
 ```
 
-Check Dell metadata and show an update plan:
+To install an archive that you downloaded manually:
 
 ```sh
-./dockwarden check-updates
-./dockwarden update
+mkdir dockwarden-v0.3.0-darwin-arm64
+tar -xzf dockwarden-v0.3.0-darwin-arm64.tar.gz \
+  -C dockwarden-v0.3.0-darwin-arm64
+cd dockwarden-v0.3.0-darwin-arm64
+./install.sh
 ```
 
-Apply a firmware update:
+Release `v0.3.0` provides archives for macOS arm64, macOS amd64, Linux amd64,
+and Linux arm64, plus the `SHA256SUMS` file. Each archive contains the binary,
+installer, README, changelog, and license. The macOS archives also contain the
+managed `fwupd-2.2.1` prefix. Keep that complete prefix. Do not copy only its
+`fwupdtool` executable.
+
+On macOS, grant Input Monitoring permission to the terminal or application
+that runs `dockwarden`. On Linux, install `fwupdmgr` using the distribution's
+normal package manager. Dockwarden does not invoke `sudo`.
+
+Run these commands first. They are read-only:
 
 ```sh
-./dockwarden update --apply
+dockwarden --version
+dockwarden status
+dockwarden update
 ```
 
-`update` is read-only. Only `update --apply` can download and write firmware.
-The updater accepts the official Dell CAB, verifies its SHA-256, and removes
-the temporary file after use. On macOS it verifies all managed runtime files
-and the fwupd compile/runtime version before network access. It runs fwupd with
-a minimal environment and isolated temporary state.
+`dockwarden update` shows the plan and does not download or write firmware.
+Only `dockwarden update --apply` can start an update. Use it only with the
+dock connected, stable power, an attended computer, and an explicit decision
+to proceed.
 
-Before an install, macOS reads the WD19 through HID. It checks identity, board,
-power, update state, five component versions, CAB members, and the MST policy.
-It selects exactly one fwupd device by plugin, embedded-controller instance ID,
-and `<service-tag>/<module-serial>` serial. The install receives that full
-40-character DeviceId. The Dell plugin reads the hardware serial again in the
-same process before its writer runs. Any failed check stops the install.
+## Does it work?
 
-An apply result of `update_staged` means that the platform accepted the update
-and requires a physical reconnect. Unplug and reconnect the dock USB-C cable.
-Then run `status` and confirm the component versions. Do not interrupt power,
-USB-C, or the host during an active update.
+Yes. The verified WD19 development run updated the dock. The update command
+itself returned an error during progress, so the final result was accepted only
+after a physical reconnect and a fresh read-only status check.
 
-An `update_verified` result means that fwupd returned success, or returned an
-error after the dock reported every candidate component version. Dockwarden
-does not run a second install after an error. If verification is not possible,
-the result remains `update_failed` or `update_staged`; follow the recovery
-instructions and run `status` before any later apply.
+The observed versions were:
 
-### WD19 update incident: 2026-08-05 (local time; 2026-08-04 UTC)
+| Component | Before | After | Result |
+| --- | --- | --- | --- |
+| Package | `01.00.47.01` | `01.01.01.01` | Updated |
+| Embedded controller | `01.01.00.13` | `01.01.00.15` | Updated |
+| USB hub Gen1 | `01.23` | `01.23` | Already current |
+| USB hub Gen2 | `01.62` | `01.62` | Already current |
+| MST | `05.07.08` | `05.07.08` | Already current |
 
-Dockwarden performed one real update on a Dell Dock WD19 during development.
-The official Dell CAB was `DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.11.cab`.
-The CAB SHA-256 was verified before the install.
+The install used the official Dell CAB
+`DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.11.cab`. Dockwarden
+verified its SHA-256 before handing it to upstream `fwupdtool`.
 
-The relevant pre-update `status` output was:
-
-```text
-package             01.00.47.01
-embedded_controller 01.01.00.13
-usb_hub_gen1        01.23
-usb_hub_gen2        01.62
-mst                 05.07.08
-```
-
-The fwupd command selected the WD19 device and began the write. Its output
-contained several device restart and wait phases, then stopped at:
+The relevant output stopped at:
 
 ```text
 Writing…: 70.5%
 fwupdtool: exit status 1
 ```
 
-The command did not report a clean completion. The old logger kept only the
-first 4096 bytes of command output, so the final low-level fwupd error is not
-recoverable from that run. The output shows several device restart and wait
-phases before the interruption. This pattern is consistent with a transient
-HID or USB re-enumeration loss, but it is not proof of the cause. fwupd also
-printed its warning that the package had not been validated; the log does not
-prove that this warning caused the interruption.
+The old logger retained only the first 4096 bytes, so the final low-level
+error is not available. The output contains several device restart and wait
+phases. This is consistent with a transient HID or USB re-enumeration loss,
+but it does not prove the cause. fwupd also printed a package validation
+warning. The log does not prove that warning caused the interruption.
 
-After the recovery reconnect, a fresh read-only `status` reported:
+After the recovery reconnect, status reported the new package and embedded
+controller versions, no checks, and no warnings. This confirms the effective
+hardware result even though the original process did not exit cleanly.
 
-```text
-package             01.01.01.01
-embedded_controller 01.01.00.15
-usb_hub_gen1        01.23
-usb_hub_gen2        01.62
-mst                 05.07.08
-checks              []
-warnings            []
-```
+The local evidence is preserved in `dockwarden-flash-20260805-0005.txt` and
+`dockwarden-recovery-status-20260805.txt`. New logs preserve both the start and
+the end of command output. Dockwarden performs one install attempt only. It
+does not retry an install after an error; it performs a read-only verification
+instead.
 
-Therefore the firmware update was effective: the package and embedded
-controller changed to the CAB versions, while the hubs and MST were already at
-the CAB versions. The only confirmed process failure is fwupd's exit during
-the write progress. That exit was not proof that the dock remained on the old
-firmware. The update was verified only after the physical reconnect and the
-post-update version read.
+## What it does
 
-The original local evidence is preserved in
-`dockwarden-flash-20260805-0005.txt` and
-`dockwarden-recovery-status-20260805.txt`. Future logs preserve both the
-beginning and the end of fwupd output. Dockwarden never retries an install
-automatically after an error.
+Dockwarden can:
 
-Use JSON output for automation:
+- identify the WD19 USB device and its topology;
+- report USB, Ethernet, audio, and downstream USB services;
+- read component firmware versions through native HID on macOS;
+- check official Dell firmware metadata and the pinned CAB checksum;
+- create a read-only update plan;
+- update the WD19 through `fwupdmgr` on Linux;
+- update the WD19 through the upstream standalone `fwupdtool` on macOS.
 
-```sh
-./dockwarden --json scan
-./dockwarden --json update
-```
+The macOS writer uses the upstream Dell Dock plugin with libusb enumeration
+and an Apple IOHIDManager transport for HID reports. Dockwarden selects one
+exact WD19 DeviceId, checks the serial in the same process, and verifies every
+candidate component after the install.
 
-Use `--verbose` with text output to show the component list.
+Dockwarden does not execute Dell Windows `.exe` packages. It does not accept
+arbitrary payloads, forced downgrades, or unverified firmware files. A USB
+descriptor version is not a firmware version.
 
-Every command appends plain-text events to `dockwarden-log.txt` with user-only
-permissions. Use `--log-file PATH` to select another file. Update logs include
-the preflight result, selected DeviceId, fwupd commands, the head and tail of
-command output, post-install version verification, and the final state. Protect
-the file because it can contain dock identifiers.
+## Safety model
+
+Before an install, macOS checks the dock identity, board, power state, update
+state, five component versions, CAB members, and the MST policy. It selects a
+single `dell_dock` DeviceId by plugin, embedded-controller instance ID, and
+`<service-tag>/<module-serial>` serial. The Dell plugin reads the hardware
+serial again immediately before its writer runs. Any failed check stops the
+install.
+
+An `update_staged` result means that the platform accepted the update and
+requires a physical reconnect. Reconnect the dock USB-C cable, then run
+`dockwarden status`. An `update_verified` result means that fwupd returned
+success, or returned an error after the dock reported every candidate version.
+If verification is not possible, the result remains `update_failed` or
+`update_staged`.
+
+Every command writes user-only text logs to `dockwarden-log.txt`. Use
+`--log-file PATH` to select another file. Update logs include the preflight,
+selected DeviceId, fwupd commands, command output head and tail, post-install
+version verification, and the final state. Protect logs because they can
+contain dock identifiers.
 
 Exit codes are:
 
@@ -181,13 +172,13 @@ Exit codes are:
 ## Firmware source
 
 The updater uses Dell driver `389W0`, which publishes the Linux CAB for the
-WD19 family. If Dell blocks the dynamic metadata page with HTTP 403,
-`dockwarden` uses browser-compatible request headers and a pinned official CAB.
-It still verifies the CAB SHA-256 before any firmware operation.
+WD19 family. If Dell blocks its metadata page with HTTP 403, Dockwarden uses
+browser-compatible request headers and a pinned official CAB. It verifies the
+CAB SHA-256 before any firmware operation.
 
-The candidate records package, embedded-controller, USB hub Gen1, USB hub Gen2,
-and MST versions. A live Dell candidate inherits those values only when its
-SHA-256 matches the pinned CAB. Missing or conflicting component evidence gives
+The candidate records package, embedded-controller, USB hub Gen1, USB hub
+Gen2, and MST versions. A live Dell candidate inherits those values only when
+its SHA-256 matches the pinned CAB. Missing or conflicting evidence gives
 `version_check_unavailable`; apply mode exits with code `2` and does not write.
 
 The Windows `.exe` is never executed. The project does not bundle Dell
@@ -195,14 +186,25 @@ firmware blobs.
 
 ## Development
 
-Run the test suite and static checks:
+Build a development binary with Go 1.22 or newer:
 
 ```sh
 GOCACHE=/tmp/dockwarden-go-cache go test ./...
 GOCACHE=/tmp/dockwarden-go-cache go vet ./...
 CGO_ENABLED=1 GOCACHE=/tmp/dockwarden-go-cache go build ./cmd/dockwarden
-GOOS=linux GOARCH=amd64 go build ./cmd/dockwarden
 ```
+
+Run the release packaging checks without hardware:
+
+```sh
+sh -n tools/release/*.sh
+sh tools/release/install_test.sh
+sh tools/release/package_test.sh
+```
+
+The macOS fwupd port is built from the pinned upstream commit. See
+[the macOS build guide](tools/fwupd-macos/README.md). The build runs upstream
+non-hardware tests and does not update a dock.
 
 Tests use fake HID, HTTP, and command interfaces. They never flash a physical
 dock. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.

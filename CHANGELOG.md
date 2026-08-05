@@ -4,10 +4,36 @@ All notable changes to `dockwarden` are recorded here.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+## [0.3.0] - 2026-08-05
+
+### Added
+
+- Native macOS HID access through IOKit and CoreFoundation.
+- Dell HID-I2C packet support for WD19 reads and writes.
+- Native macOS updates for the WD19 embedded controller, USB hubs, and package metadata.
+- Pre-write version checks and MST safety guards.
+- Pinned Dell CAB fallback when the Dell metadata page returns HTTP 403.
+- Tests for HID packets, firmware version comparison, and guarded writes.
+- Tests for the macOS fwupdtool bridge and its temporary state isolation.
+- Cross-platform CI, security guidance, contribution guidance, and project credits.
+- Prebuilt release archives for macOS arm64/amd64 and Linux amd64/arm64.
+- A checksum-verified bootstrap installer and deterministic archive packaging.
+
+### Changed
+
+- macOS and Linux now use Dell driver `389W0` and the official Linux CAB.
+- The Windows Dell updater is never executed.
+- Release builds inject the tag version into `dockwarden --version`.
+- macOS release archives include the complete managed `fwupdtool` runtime.
+
 ### Documentation
 
 - Added a step-by-step guide for adding support for other docking stations.
 - Added the firmware risk warning to the README.
+- Added the verified WD19 update incident report with pre- and post-update versions.
+- Added English installation, release, and recovery guidance.
 
 ### Firmware safety
 
@@ -33,24 +59,6 @@ All notable changes to `dockwarden` are recorded here.
 - Fixed extraction of root-level firmware members from the 389W0 CAB.
 - Added a macOS bridge to upstream standalone `fwupdtool` 2.2.1.
 - Added an isolated macOS fwupdtool build with the libusb backend.
-
-## [0.3.0-dev] - 2026-08-04
-
-### Added
-
-- Native macOS HID access through IOKit and CoreFoundation.
-- Dell HID-I2C packet support for WD19 reads and writes.
-- Native macOS updates for the WD19 embedded controller, USB hubs, and package metadata.
-- Pre-write version checks and MST safety guards.
-- Pinned Dell CAB fallback when the Dell metadata page returns HTTP 403.
-- Tests for HID packets, firmware version comparison, and guarded writes.
-- Tests for the macOS fwupdtool bridge and its temporary state isolation.
-- Cross-platform CI, security guidance, contribution guidance, and project credits.
-
-### Changed
-
-- macOS and Linux now use Dell driver `389W0` and the official Linux CAB.
-- The Windows Dell updater is never executed.
 
 ## [0.2.0-dev]
 
