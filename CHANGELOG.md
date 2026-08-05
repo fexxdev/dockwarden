@@ -25,6 +25,9 @@ All notable changes to `dockwarden` are recorded here.
 - Added read-only component firmware reporting on macOS.
 - Reported accepted updates as `update_staged` until the dock is reconnected
   and checked again.
+- Added private text logs with fwupd command tails and post-install checks.
+- Reclassified fwupd errors only when all candidate versions are verified.
+- Reopened the macOS HID handle after transient dock re-enumeration.
 - Updated the pinned Dell candidate to driver `389W0` and its verified CAB.
 - Added Dell Akamai request headers and a pinned fallback for metadata HTTP 403.
 - Fixed extraction of root-level firmware members from the 389W0 CAB.

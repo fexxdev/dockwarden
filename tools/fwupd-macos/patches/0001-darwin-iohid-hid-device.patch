@@ -42,7 +42,7 @@ index 247663f..7e42601 100644
  
  static gboolean
  fu_hid_device_setup(FuDevice *device, GError **error)
-@@ -184,10 +196,297 @@ fu_hid_device_setup(FuDevice *device, GError **error)
+@@ -184,10 +196,364 @@ fu_hid_device_setup(FuDevice *device, GError **error)
  	return TRUE;
  }
  
@@ -327,6 +327,73 @@ index 247663f..7e42601 100644
 +		    (guint32)status);
 +	return FALSE;
 +}
++
++static gboolean
++fu_hid_device_darwin_report_is_transient(IOReturn status)
++{
++	switch (status) {
++	case kIOReturnNoDevice:
++	case kIOReturnNotOpen:
++	case kIOReturnNotResponding:
++	case kIOReturnAborted:
++	case kIOReturnTimeout:
++		return TRUE;
++	default:
++		return FALSE;
++	}
++}
++
++static gboolean
++fu_hid_device_darwin_reopen(FuHidDevice *self, GError **error)
++{
++	g_autofree gchar *last_error = NULL;
++
++	fu_hid_device_close_darwin(self);
++	for (guint attempt = 0; attempt < 20; attempt++) {
++		g_autoptr(GError) error_local = NULL;
++		if (fu_hid_device_open_darwin(self, &error_local))
++			return TRUE;
++		g_free(last_error);
++		last_error = g_strdup(error_local != NULL ? error_local->message : "unknown HID open error");
++		if (attempt + 1 < 20)
++			g_usleep(100 * 1000);
++	}
++	g_set_error(error,
++		    FWUPD_ERROR,
++		    FWUPD_ERROR_TIMED_OUT,
++		    "cannot reopen macOS HID device after re-enumeration: %s",
++		    last_error != NULL ? last_error : "unknown HID open error");
++	return FALSE;
++}
++
++static gboolean
++fu_hid_device_darwin_report_retry(FuHidDevice *self,
++					  gboolean set_report,
++					  IOHIDReportType type,
++					  guint8 *buf,
++					  gsize bufsz,
++					  guint timeout,
++					  gsize *actual_length,
++					  GError **error)
++{
++	for (guint attempt = 0; attempt < 2; attempt++) {
++		FuHidDevicePrivate *priv = GET_PRIVATE(self);
++		IOReturn status = fu_hid_device_darwin_report(priv,
++								 set_report,
++								 type,
++								 buf,
++								 bufsz,
++								 timeout,
++								 actual_length);
++		if (status == kIOReturnSuccess)
++			return TRUE;
++		if (attempt == 1 || !fu_hid_device_darwin_report_is_transient(status))
++			return fu_hid_device_darwin_report_error(status, set_report ? "SetReport" : "GetReport", error);
++		if (!fu_hid_device_darwin_reopen(self, error))
++			return FALSE;
++	}
++	return FALSE;
++}
 +#endif
 +
  static gboolean
@@ -340,7 +407,7 @@ index 247663f..7e42601 100644
  	FuHidDevicePrivate *priv = GET_PRIVATE(self);
  	FuUsbDeviceClaimFlags flags = 0;
  
-@@ -236,12 +535,17 @@ fu_hid_device_open(FuDevice *device, GError **error)
+@@ -236,12 +602,17 @@ fu_hid_device_open(FuDevice *device, GError **error)
  
  	/* success */
  	return TRUE;
@@ -358,7 +425,7 @@ index 247663f..7e42601 100644
  	FuHidDevicePrivate *priv = GET_PRIVATE(self);
  	FuUsbDeviceClaimFlags flags = 0;
  	g_autoptr(GError) error_local = NULL;
-@@ -270,6 +574,7 @@ fu_hid_device_close(FuDevice *device, GError **error)
+@@ -270,6 +641,7 @@ fu_hid_device_close(FuDevice *device, GError **error)
  
  	/* FuUsbDevice->close */
  	return FU_DEVICE_CLASS(fu_hid_device_parent_class)->close(device, error);
@@ -366,44 +433,44 @@ index 247663f..7e42601 100644
  }
  
  /**
-@@ -421,6 +726,21 @@ fu_hid_device_set_report_internal(FuHidDevice *self, FuHidDeviceRetryHelper *hel
+@@ -421,6 +793,21 @@ fu_hid_device_set_report_internal(FuHidDevice *self, FuHidDeviceRetryHelper *hel
  	FuHidDevicePrivate *priv = GET_PRIVATE(self);
  	gsize actual_len = 0;
  
 +#ifdef __APPLE__
 +	if (priv->hid_device != NULL) {
-+		IOReturn status = fu_hid_device_darwin_report(priv,
-+							      TRUE,
-+							      (helper->flags & FU_HID_DEVICE_FLAG_IS_FEATURE) != 0 ?
-+								  kIOHIDReportTypeFeature :
-+								  kIOHIDReportTypeOutput,
-+							      helper->buf,
-+							      helper->bufsz,
-+							      helper->timeout,
-+							      &actual_len);
-+		if (!fu_hid_device_darwin_report_error(status, "SetReport", error))
++		if (!fu_hid_device_darwin_report_retry(self,
++										TRUE,
++										(helper->flags & FU_HID_DEVICE_FLAG_IS_FEATURE) != 0 ?
++											kIOHIDReportTypeFeature :
++											kIOHIDReportTypeOutput,
++										helper->buf,
++										helper->bufsz,
++										helper->timeout,
++										&actual_len,
++										error))
 +			return FALSE;
 +	} else
 +#endif
  	/* what method do we use? */
  	if (helper->flags & FU_HID_DEVICE_FLAG_USE_INTERRUPT_TRANSFER) {
  		g_autofree gchar *title =
-@@ -552,6 +872,21 @@ fu_hid_device_get_report_internal(FuHidDevice *self, FuHidDeviceRetryHelper *hel
+@@ -552,6 +939,21 @@ fu_hid_device_get_report_internal(FuHidDevice *self, FuHidDeviceRetryHelper *hel
  	FuHidDevicePrivate *priv = GET_PRIVATE(self);
  	gsize actual_len = 0;
  
 +#ifdef __APPLE__
 +	if (priv->hid_device != NULL) {
-+		IOReturn status = fu_hid_device_darwin_report(priv,
-+							      FALSE,
-+							      (helper->flags & FU_HID_DEVICE_FLAG_IS_FEATURE) != 0 ?
-+								  kIOHIDReportTypeFeature :
-+								  kIOHIDReportTypeInput,
-+							      helper->buf,
-+							      helper->bufsz,
-+							      helper->timeout,
-+							      &actual_len);
-+		if (!fu_hid_device_darwin_report_error(status, "GetReport", error))
++		if (!fu_hid_device_darwin_report_retry(self,
++										FALSE,
++										(helper->flags & FU_HID_DEVICE_FLAG_IS_FEATURE) != 0 ?
++											kIOHIDReportTypeFeature :
++											kIOHIDReportTypeInput,
++										helper->buf,
++										helper->bufsz,
++										helper->timeout,
++										&actual_len,
++										error))
 +			return FALSE;
 +	} else
 +#endif

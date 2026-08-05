@@ -6,7 +6,9 @@ That commit reports fwupd version 2.2.1.
 
 The script applies the pinned Darwin patch in `patches/`.
 The patch routes HID reports through Apple's IOHIDManager.
-This avoids the libusb interface claim used on Linux.
+This avoids the libusb interface claim used on Linux. It reopens the HID
+device after a transient disconnect or re-enumeration before retrying one
+report, so a dock restart does not leave a stale handle in the writer.
 
 The build needs Apple Silicon Homebrew and these packages:
 

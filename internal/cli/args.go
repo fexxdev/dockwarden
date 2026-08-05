@@ -9,6 +9,7 @@ type Options struct {
 	JSON    bool
 	Verbose bool
 	Apply   bool
+	LogFile string
 	Version bool
 	Help    bool
 	Command string
@@ -25,7 +26,8 @@ var commands = map[string]struct{}{
 func Parse(args []string) (Options, error) {
 	var options Options
 
-	for _, arg := range args {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
 		switch arg {
 		case "--json":
 			options.JSON = true
@@ -33,6 +35,12 @@ func Parse(args []string) (Options, error) {
 			options.Verbose = true
 		case "--apply":
 			options.Apply = true
+		case "--log-file":
+			if index+1 >= len(args) || strings.TrimSpace(args[index+1]) == "" || strings.HasPrefix(args[index+1], "-") {
+				return Options{}, fmt.Errorf("--log-file requires a path")
+			}
+			index++
+			options.LogFile = args[index]
 		case "--version", "-V":
 			options.Version = true
 		case "--help", "-h":
@@ -64,5 +72,5 @@ func Parse(args []string) (Options, error) {
 }
 
 func Usage() string {
-	return "usage: dockwarden [--json] [--verbose] [--apply] <scan|status|doctor|check-updates|update>"
+	return "usage: dockwarden [--json] [--verbose] [--log-file PATH] [--apply] <scan|status|doctor|check-updates|update>"
 }

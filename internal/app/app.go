@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 
 	"github.com/fexxdev/dockwarden/internal/cli"
 	"github.com/fexxdev/dockwarden/internal/domain"
+	"github.com/fexxdev/dockwarden/internal/logging"
 	"github.com/fexxdev/dockwarden/internal/output"
 )
 
@@ -30,22 +32,35 @@ type Dependencies struct {
 	Inspector Inspector
 	Updates   UpdateChecker
 	Updater   FirmwareUpdater
+	Logger    logging.Logger
 	Out       io.Writer
 	Err       io.Writer
 }
 
 func Run(ctx context.Context, options cli.Options, dependencies Dependencies) int {
+	logEvent(dependencies.Logger, "INFO", "command.start", map[string]string{
+		"command": options.Command,
+		"apply":   fmt.Sprintf("%t", options.Apply),
+		"json":    fmt.Sprintf("%t", options.JSON),
+	})
 	if dependencies.Inspector == nil {
+		logEvent(dependencies.Logger, "ERROR", "command.error", map[string]string{"reason": "inspector is not configured"})
 		writeError(dependencies.Err, "inspector is not configured")
 		return 2
 	}
 
 	report, err := dependencies.Inspector.Inspect(ctx, options.Command)
 	if err != nil {
+		logEvent(dependencies.Logger, "ERROR", "inspect.failed", map[string]string{"error": err.Error()})
 		writeError(dependencies.Err, err.Error())
 		return 2
 	}
 	report.Command = options.Command
+	logEvent(dependencies.Logger, "INFO", "inspect.complete", map[string]string{
+		"state":    report.State,
+		"platform": report.Platform,
+		"dock":     reportDockName(report),
+	})
 
 	if options.Command == "doctor" {
 		report.Checks = append(report.Checks, doctorChecks(report)...)
@@ -63,9 +78,24 @@ func Run(ctx context.Context, options cli.Options, dependencies Dependencies) in
 		err = output.RenderText(dependencies.Out, report, options.Verbose)
 	}
 	if err != nil {
+		logEvent(dependencies.Logger, "ERROR", "render.failed", map[string]string{"error": err.Error()})
 		writeError(dependencies.Err, err.Error())
 		return 2
 	}
+	if report.Update != nil {
+		logEvent(dependencies.Logger, updateLogLevel(report.Update.State), "update.result", map[string]string{
+			"state":  report.Update.State,
+			"reason": report.Update.Reason,
+		})
+	}
+	completionFields := map[string]string{
+		"command": options.Command,
+		"state":   report.State,
+	}
+	if snapshot, marshalErr := json.Marshal(report); marshalErr == nil {
+		completionFields["report"] = string(snapshot)
+	}
+	logEvent(dependencies.Logger, "INFO", "command.complete", completionFields)
 	if report.State == "detected" {
 		if options.Command == "update" && options.Apply && report.Update != nil {
 			switch report.Update.State {
@@ -76,6 +106,26 @@ func Run(ctx context.Context, options cli.Options, dependencies Dependencies) in
 		return 0
 	}
 	return 1
+}
+
+func logEvent(logger logging.Logger, level, event string, fields map[string]string) {
+	if logger != nil {
+		_ = logger.Log(level, event, fields)
+	}
+}
+
+func reportDockName(report domain.Report) string {
+	if report.Dock == nil {
+		return ""
+	}
+	return report.Dock.Model
+}
+
+func updateLogLevel(state string) string {
+	if state == "update_failed" {
+		return "ERROR"
+	}
+	return "INFO"
 }
 
 func checkUpdates(ctx context.Context, report domain.Report, updates UpdateChecker) *domain.UpdateCheck {

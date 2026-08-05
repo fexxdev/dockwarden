@@ -13,12 +13,14 @@ import (
 	"github.com/fexxdev/dockwarden/internal/dell"
 	"github.com/fexxdev/dockwarden/internal/discovery"
 	"github.com/fexxdev/dockwarden/internal/domain"
+	"github.com/fexxdev/dockwarden/internal/logging"
 	"github.com/fexxdev/dockwarden/internal/macos/hid"
 	"github.com/fexxdev/dockwarden/internal/update"
 )
 
 const version = "0.3.0-dev"
 const wd19LinuxDriverURL = "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=389w0"
+const defaultLogFile = "dockwarden-log.txt"
 
 func main() {
 	options, err := cli.Parse(os.Args[1:])
@@ -35,10 +37,22 @@ func main() {
 		fmt.Println(cli.Usage())
 		return
 	}
+	logPath := options.LogFile
+	if logPath == "" {
+		logPath = defaultLogFile
+	}
+	logger, err := logging.NewFile(logPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "dockwarden:", err)
+		os.Exit(2)
+	}
+	defer logger.Close()
+	_ = logger.Log("INFO", "logger.ready", map[string]string{"path": logPath})
 
 	dependencies := app.Dependencies{
-		Out: os.Stdout,
-		Err: os.Stderr,
+		Out:    os.Stdout,
+		Err:    os.Stderr,
+		Logger: logger,
 	}
 	httpClient := &http.Client{Timeout: 15 * time.Second}
 	driverURL := wd19LinuxDriverURL
@@ -50,11 +64,11 @@ func main() {
 		dependencies.Inspector = discovery.MacInspector{
 			Firmware: update.MacFirmwareReader{Open: openHID},
 		}
-		dependencies.Updater = newDarwinFwupdToolUpdater(httpClient, openHID)
+		dependencies.Updater = newDarwinFwupdToolUpdater(httpClient, openHID, logger)
 		driverURL = wd19LinuxDriverURL
 	case "linux":
 		dependencies.Inspector = discovery.LinuxInspector{}
-		dependencies.Updater = update.FwupdUpdater{HTTP: httpClient}
+		dependencies.Updater = update.FwupdUpdater{HTTP: httpClient, Logger: logger}
 		driverURL = wd19LinuxDriverURL
 	default:
 		fmt.Fprintf(os.Stderr, "dockwarden: unsupported platform %s\n", runtime.GOOS)
@@ -73,10 +87,15 @@ func main() {
 	os.Exit(app.Run(context.Background(), options, dependencies))
 }
 
-func newDarwinFwupdToolUpdater(httpClient *http.Client, openHID update.HIDOpener) update.FwupdToolUpdater {
+func newDarwinFwupdToolUpdater(httpClient *http.Client, openHID update.HIDOpener, loggers ...logging.Logger) update.FwupdToolUpdater {
+	var logger logging.Logger
+	if len(loggers) > 0 {
+		logger = loggers[0]
+	}
 	return update.FwupdToolUpdater{
 		HTTP:     httpClient,
 		ToolPath: os.Getenv(update.FwupdToolEnvironmentVariable),
+		Logger:   logger,
 		Preflight: update.MacPreflightReader{
 			Open: openHID,
 		},

@@ -12,6 +12,22 @@ func TestParseAcceptsJSONBeforeCommand(t *testing.T) {
 	}
 }
 
+func TestParseAcceptsLogFile(t *testing.T) {
+	got, err := Parse([]string{"--log-file", "/tmp/dockwarden.txt", "status"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LogFile != "/tmp/dockwarden.txt" {
+		t.Fatalf("unexpected log file: %+v", got)
+	}
+}
+
+func TestParseRejectsMissingLogFile(t *testing.T) {
+	if _, err := Parse([]string{"--log-file", "status"}); err == nil {
+		t.Fatal("expected missing log-file value error")
+	}
+}
+
 func TestParseRejectsUnknownCommand(t *testing.T) {
 	if _, err := Parse([]string{"explode"}); err == nil {
 		t.Fatal("expected unknown command error")

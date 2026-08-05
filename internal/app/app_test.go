@@ -11,6 +11,17 @@ import (
 	"github.com/fexxdev/dockwarden/internal/domain"
 )
 
+type fakeLogger struct {
+	events []string
+	fields []map[string]string
+}
+
+func (f *fakeLogger) Log(_ string, event string, fields map[string]string) error {
+	f.events = append(f.events, event)
+	f.fields = append(f.fields, fields)
+	return nil
+}
+
 type fakeInspector struct {
 	report domain.Report
 	err    error
@@ -103,6 +114,38 @@ func TestRunDetectedCommands(t *testing.T) {
 				t.Fatal("doctor should add checks")
 			}
 		})
+	}
+}
+
+func TestRunLogsCommandLifecycle(t *testing.T) {
+	inspector := &fakeInspector{report: detectedReport()}
+	logger := &fakeLogger{}
+	var out bytes.Buffer
+	code := Run(context.Background(), cli.Options{Command: "status", JSON: true}, Dependencies{
+		Inspector: inspector,
+		Logger:    logger,
+		Out:       &out,
+		Err:       &bytes.Buffer{},
+	})
+	if code != 0 {
+		t.Fatalf("unexpected exit code: %d", code)
+	}
+	for _, event := range []string{"command.start", "inspect.complete", "command.complete"} {
+		found := false
+		for _, got := range logger.events {
+			if got == event {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing log event %q in %v", event, logger.events)
+		}
+	}
+	for index, event := range logger.events {
+		if event == "command.complete" && logger.fields[index]["report"] == "" {
+			t.Fatal("command completion must include the full report in the log")
+		}
 	}
 }
 

@@ -3,7 +3,10 @@ set -eu
 
 fwupd_version="2.2.1"
 fwupd_commit="61c7cf1873fedd78fa031e8a8829cb3413aaef46"
-darwin_patch_sha256="1368ab6e7d9a15cb5e9d3a6e07f12b521996a72831f709078b0b2fbbe847d8fb"
+darwin_patch_sha256="b98adbdd79b15b54df3066e27f616d976484f916527517cc8b6007f7ef2a7fb9"
+# This is the previous Dockwarden-managed patch. It is accepted only to
+# replace that exact legacy prefix with the current verified build.
+legacy_darwin_patch_sha256="1368ab6e7d9a15cb5e9d3a6e07f12b521996a72831f709078b0b2fbbe847d8fb"
 fwupd_repo="https://github.com/fwupd/fwupd.git"
 jinja2_version="3.1.6"
 markupsafe_version="3.0.3"
@@ -65,7 +68,7 @@ if [ -e "$prefix" ] || [ -L "$prefix" ]; then
 		[ "$(sed -n '1p' "$prefix/$managed_marker_name" 2>/dev/null || true)" != "$managed_marker_value" ]; then
 		legacy_manifest="$prefix/manifest.json"
 		if [ ! -f "$legacy_manifest" ] || [ -L "$legacy_manifest" ] ||
-			! python3 - "$legacy_manifest" "$fwupd_version" "$fwupd_commit" "$darwin_patch_sha256" <<'PY'
+		! python3 - "$legacy_manifest" "$fwupd_version" "$fwupd_commit" "$darwin_patch_sha256" "$legacy_darwin_patch_sha256" <<'PY'
 import json
 import pathlib
 import sys
@@ -74,9 +77,8 @@ manifest = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 expected = {
     "fwupd_version": sys.argv[2],
     "source_commit": sys.argv[3],
-    "darwin_patch_sha256": sys.argv[4],
 }
-if any(manifest.get(key) != value for key, value in expected.items()):
+if any(manifest.get(key) != value for key, value in expected.items()) or manifest.get("darwin_patch_sha256") not in sys.argv[4:6]:
     raise SystemExit(1)
 if not isinstance(manifest.get("runtime_sha256"), dict):
     raise SystemExit(1)

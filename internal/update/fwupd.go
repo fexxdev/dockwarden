@@ -11,8 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/fexxdev/dockwarden/internal/domain"
+	"github.com/fexxdev/dockwarden/internal/logging"
 )
 
 const maxFirmwarePayloadBytes = 64 * 1024 * 1024
@@ -29,9 +31,25 @@ type FwupdUpdater struct {
 	HTTP    HTTPDoer
 	Runner  CommandRunner
 	TempDir string
+	Logger  logging.Logger
 }
 
-func (u FwupdUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *domain.FirmwareCandidate) domain.UpdateCheck {
+func (u FwupdUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *domain.FirmwareCandidate) (result domain.UpdateCheck) {
+	logUpdateEvent(u.Logger, "INFO", "firmware.apply.start", map[string]string{
+		"backend": "fwupdmgr",
+		"model":   dockModel(dock),
+	})
+	defer func() {
+		level := "INFO"
+		if result.State == "update_failed" {
+			level = "ERROR"
+		}
+		logUpdateEvent(u.Logger, level, "firmware.apply.complete", map[string]string{
+			"backend": "fwupdmgr",
+			"state":   result.State,
+			"reason":  result.Reason,
+		})
+	}()
 	if !isSupportedWD19(dock) {
 		return failed(candidate, "firmware backend accepts only the detected Dell Dock WD19 (413c:b06e)")
 	}
@@ -64,7 +82,17 @@ func (u FwupdUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *d
 	if runner == nil {
 		runner = systemRunner{}
 	}
-	output, err := runner.Run(ctx, "fwupdmgr", "local-install", payloadPath, "--assume-yes")
+	args := []string{"local-install", payloadPath, "--assume-yes"}
+	logUpdateEvent(u.Logger, "INFO", "fwupdmgr.command.start", map[string]string{
+		"command": "fwupdmgr",
+		"args":    strings.Join(args, " "),
+	})
+	output, err := runner.Run(ctx, "fwupdmgr", args...)
+	logUpdateEvent(u.Logger, commandLogLevel(err), "fwupdmgr.command.complete", map[string]string{
+		"command": "fwupdmgr",
+		"output":  summarize(string(output)),
+		"error":   errorText(err),
+	})
 	if err != nil {
 		reason := "fwupdmgr: " + err.Error()
 		if text := strings.TrimSpace(string(output)); text != "" {
@@ -86,6 +114,10 @@ func (u FwupdUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *d
 }
 
 func (u FwupdUpdater) download(ctx context.Context, candidate *domain.FirmwareCandidate) (string, error) {
+	logUpdateEvent(u.Logger, "INFO", "firmware.download.start", map[string]string{
+		"package": candidatePackage(candidate),
+		"url":     candidateURL(candidate),
+	})
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, candidate.DownloadURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("cannot create Dell firmware request: %w", err)
@@ -138,10 +170,54 @@ func (u FwupdUpdater) download(ctx context.Context, candidate *domain.FirmwareCa
 	}
 	actualHash := hex.EncodeToString(hasher.Sum(nil))
 	if !strings.EqualFold(actualHash, candidate.SHA256) {
+		logUpdateEvent(u.Logger, "ERROR", "firmware.download.failed", map[string]string{
+			"package": candidatePackage(candidate),
+			"reason":  "SHA-256 mismatch",
+			"sha256":  actualHash,
+		})
 		return "", fmt.Errorf("Dell firmware SHA-256 mismatch: got %s", actualHash)
 	}
 	keep = true
+	logUpdateEvent(u.Logger, "INFO", "firmware.download.complete", map[string]string{
+		"package": candidatePackage(candidate),
+		"sha256":  actualHash,
+	})
 	return payloadPath, nil
+}
+
+func dockModel(dock *domain.Dock) string {
+	if dock == nil {
+		return ""
+	}
+	return dock.Model
+}
+
+func candidatePackage(candidate *domain.FirmwareCandidate) string {
+	if candidate == nil {
+		return ""
+	}
+	return candidate.PackageName
+}
+
+func candidateURL(candidate *domain.FirmwareCandidate) string {
+	if candidate == nil {
+		return ""
+	}
+	return candidate.DownloadURL
+}
+
+func commandLogLevel(err error) string {
+	if err != nil {
+		return "ERROR"
+	}
+	return "INFO"
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func isSupportedWD19(dock *domain.Dock) bool {
@@ -203,7 +279,18 @@ func summarize(text string) string {
 	if len(text) <= maxSummaryBytes {
 		return text
 	}
-	return text[:maxSummaryBytes] + "..."
+	const marker = "\n...[output truncated; head and tail kept]...\n"
+	available := maxSummaryBytes - len(marker)
+	headLength := available / 2
+	tailLength := available - headLength
+	for headLength > 0 && !utf8.RuneStart(text[headLength]) {
+		headLength--
+	}
+	tailStart := len(text) - tailLength
+	for tailStart < len(text) && !utf8.RuneStart(text[tailStart]) {
+		tailStart++
+	}
+	return text[:headLength] + marker + text[tailStart:]
 }
 
 type systemRunner struct{}

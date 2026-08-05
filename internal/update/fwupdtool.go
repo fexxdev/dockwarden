@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/fexxdev/dockwarden/internal/domain"
+	"github.com/fexxdev/dockwarden/internal/logging"
 )
 
 const (
@@ -20,7 +21,7 @@ const (
 	FwupdToolEnvironmentVariable = "DOCKWARDEN_FWUPDTOOL"
 	fwupdToolVersion             = "2.2.1"
 	fwupdSourceCommit            = "61c7cf1873fedd78fa031e8a8829cb3413aaef46"
-	fwupdDarwinPatchSHA256       = "1368ab6e7d9a15cb5e9d3a6e07f12b521996a72831f709078b0b2fbbe847d8fb"
+	fwupdDarwinPatchSHA256       = "b98adbdd79b15b54df3066e27f616d976484f916527517cc8b6007f7ef2a7fb9"
 	fwupdExpectedSerialEnv       = "DOCKWARDEN_EXPECTED_DELL_DOCK_SERIAL"
 )
 
@@ -39,6 +40,7 @@ type FwupdToolUpdater struct {
 	ConfigDir string
 	TempDir   string
 	Preflight MacPreflighter
+	Logger    logging.Logger
 }
 
 type fwupdToolManifest struct {
@@ -64,10 +66,29 @@ type fwupdToolDevicesOutput struct {
 }
 
 type fwupdToolDevice struct {
-	Plugin      string   `json:"Plugin"`
-	InstanceIDs []string `json:"InstanceIds"`
-	Serial      string   `json:"Serial"`
-	DeviceID    string   `json:"DeviceId"`
+	Name           string   `json:"Name"`
+	Summary        string   `json:"Summary"`
+	Plugin         string   `json:"Plugin"`
+	InstanceIDs    []string `json:"InstanceIds"`
+	Serial         string   `json:"Serial"`
+	DeviceID       string   `json:"DeviceId"`
+	ParentDeviceID string   `json:"ParentDeviceId"`
+	CompositeID    string   `json:"CompositeId"`
+	Version        string   `json:"Version"`
+	Flags          []string `json:"Flags"`
+	Problems       []string `json:"Problems"`
+}
+
+type fwupdPostInstallState string
+
+const (
+	fwupdPostInstallVerified fwupdPostInstallState = "verified"
+	fwupdPostInstallStaged   fwupdPostInstallState = "staged"
+)
+
+type fwupdPostInstallResult struct {
+	State  fwupdPostInstallState
+	Reason string
 }
 
 var fwupdDeviceIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
@@ -90,6 +111,7 @@ var fwupdRequiredRuntimeFiles = []string{
 
 // CheckReady verifies the local macOS writer before apply mode accesses Dell.
 func (u FwupdToolUpdater) CheckReady(ctx context.Context) error {
+	logUpdateEvent(u.Logger, "INFO", "fwupd.ready.start", map[string]string{"backend": "fwupdtool"})
 	toolPath, err := u.resolveToolPath()
 	if err != nil {
 		return err
@@ -109,10 +131,30 @@ func (u FwupdToolUpdater) CheckReady(ctx context.Context) error {
 		return fmt.Errorf("cannot create temporary fwupd state: %w", err)
 	}
 	defer os.RemoveAll(stateDir)
-	return verifyFwupdToolVersion(ctx, runner, fwupdToolEnvironment(stateDir), toolPath)
+	err = verifyFwupdToolVersion(ctx, runner, fwupdToolEnvironment(stateDir), toolPath, u.Logger)
+	logUpdateEvent(u.Logger, commandLogLevel(err), "fwupd.ready", map[string]string{
+		"backend": "fwupdtool",
+		"error":   errorText(err),
+	})
+	return err
 }
 
-func (u FwupdToolUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *domain.FirmwareCandidate) domain.UpdateCheck {
+func (u FwupdToolUpdater) Apply(ctx context.Context, dock *domain.Dock, candidate *domain.FirmwareCandidate) (result domain.UpdateCheck) {
+	logUpdateEvent(u.Logger, "INFO", "firmware.apply.start", map[string]string{
+		"backend": "fwupdtool",
+		"model":   dockModel(dock),
+	})
+	defer func() {
+		level := "INFO"
+		if result.State == "update_failed" {
+			level = "ERROR"
+		}
+		logUpdateEvent(u.Logger, level, "firmware.apply.complete", map[string]string{
+			"backend": "fwupdtool",
+			"state":   result.State,
+			"reason":  result.Reason,
+		})
+	}()
 	if !isSupportedWD19(dock) {
 		return failed(candidate, "firmware backend accepts only the detected Dell Dock WD19 (413c:b06e)")
 	}
@@ -155,9 +197,14 @@ func (u FwupdToolUpdater) Apply(ctx context.Context, dock *domain.Dock, candidat
 	}
 	defer os.RemoveAll(stateDir)
 	env := fwupdToolEnvironment(stateDir)
-	if err := verifyFwupdToolVersion(ctx, runner, env, toolPath); err != nil {
+	if err := verifyFwupdToolVersion(ctx, runner, env, toolPath, u.Logger); err != nil {
+		logUpdateEvent(u.Logger, "ERROR", "fwupd.ready", map[string]string{
+			"backend": "fwupdtool",
+			"error":   err.Error(),
+		})
 		return failed(candidate, err.Error())
 	}
+	logUpdateEvent(u.Logger, "INFO", "fwupd.ready", map[string]string{"backend": "fwupdtool"})
 
 	preflight := u.Preflight
 	if preflight == nil {
@@ -167,7 +214,7 @@ func (u FwupdToolUpdater) Apply(ctx context.Context, dock *domain.Dock, candidat
 }
 
 func (u FwupdToolUpdater) applyWithTarget(ctx context.Context, dock *domain.Dock, candidate *domain.FirmwareCandidate, runner CommandRunner, env []string, toolPath string, preflight MacPreflighter) domain.UpdateCheck {
-	payloadPath, err := (FwupdUpdater{HTTP: u.HTTP, TempDir: u.TempDir}).download(ctx, candidate)
+	payloadPath, err := (FwupdUpdater{HTTP: u.HTTP, TempDir: u.TempDir, Logger: u.Logger}).download(ctx, candidate)
 	if err != nil {
 		return failed(candidate, err.Error())
 	}
@@ -177,6 +224,11 @@ func (u FwupdToolUpdater) applyWithTarget(ctx context.Context, dock *domain.Dock
 	if err != nil {
 		return failed(candidate, err.Error())
 	}
+	logUpdateEvent(u.Logger, "INFO", "macos.preflight.complete", map[string]string{
+		"service_tag":   result.ServiceTag,
+		"module_serial": fmt.Sprintf("%d", result.ModuleSerial),
+		"update":        fmt.Sprintf("%t", result.UpdateAvailable),
+	})
 	if !result.UpdateAvailable {
 		return domain.UpdateCheck{
 			State:     "up_to_date",
@@ -186,7 +238,7 @@ func (u FwupdToolUpdater) applyWithTarget(ctx context.Context, dock *domain.Dock
 		}
 	}
 	expectedSerial := fwupdSerial(result.ServiceTag, result.ModuleSerial)
-	deviceID, err := selectFwupdWD19Device(ctx, runner, env, toolPath, expectedSerial)
+	deviceID, err := selectFwupdWD19Device(ctx, runner, env, toolPath, expectedSerial, u.Logger)
 	if err != nil {
 		return failed(candidate, err.Error())
 	}
@@ -201,17 +253,72 @@ func (u FwupdToolUpdater) applyWithTarget(ctx context.Context, dock *domain.Dock
 	}
 	installEnv := append([]string(nil), env...)
 	installEnv = append(installEnv, fwupdExpectedSerialEnv+"="+expectedSerial)
-	output, err := runCommandWithEnv(ctx, runner, installEnv, toolPath, args...)
+	output, err := runLoggedFwupdCommand(ctx, runner, installEnv, toolPath, u.Logger, args...)
+	logUpdateEvent(u.Logger, commandLogLevel(err), "fwupdtool.target.result", map[string]string{
+		"device": deviceID,
+		"error":  errorText(err),
+	})
+	postInstall, postInstallErr := fwupdPostInstallVerification(ctx, runner, env, toolPath, deviceID, candidate, u.Logger)
 	if err != nil {
+		if postInstallErr == nil && postInstall.State == fwupdPostInstallVerified {
+			reason := "fwupdtool returned an error after the candidate versions were verified on the dock: " + err.Error()
+			if text := strings.TrimSpace(string(output)); text != "" {
+				reason += ": " + summarize(text)
+			}
+			return domain.UpdateCheck{
+				State:     "update_verified",
+				SourceURL: candidate.SourceURL,
+				Reason:    reason,
+				Candidate: candidate,
+			}
+		}
+		if postInstallErr == nil && postInstall.State == fwupdPostInstallStaged {
+			reason := "fwupdtool returned an error, but the dock reports an update pending; unplug and reconnect the dock USB-C cable, then run status: " + err.Error()
+			if text := strings.TrimSpace(string(output)); text != "" {
+				reason += ": " + summarize(text)
+			}
+			return domain.UpdateCheck{
+				State:     "update_staged",
+				SourceURL: candidate.SourceURL,
+				Reason:    reason,
+				Candidate: candidate,
+			}
+		}
 		reason := "fwupdtool: " + err.Error()
 		if text := strings.TrimSpace(string(output)); text != "" {
 			reason += ": " + summarize(text)
 		}
+		if postInstallErr != nil {
+			reason += "; post-install verification unavailable: " + postInstallErr.Error()
+		} else if postInstall.Reason != "" {
+			reason += "; post-install verification failed: " + postInstall.Reason
+		}
+		return failed(candidate, reason)
+	}
+	if postInstallErr == nil && postInstall.State == fwupdPostInstallVerified {
+		reason := "fwupdtool completed and all candidate component versions were verified on the selected WD19"
+		if text := strings.TrimSpace(string(output)); text != "" {
+			reason += ": " + summarize(text)
+		}
+		return domain.UpdateCheck{
+			State:     "update_verified",
+			SourceURL: candidate.SourceURL,
+			Reason:    reason,
+			Candidate: candidate,
+		}
+	}
+	if postInstallErr == nil && len(candidate.ComponentVersions) > 0 && postInstall.State != fwupdPostInstallStaged {
+		reason := "fwupdtool completed, but post-install verification did not match the candidate: " + postInstall.Reason
 		return failed(candidate, reason)
 	}
 	reason := "fwupdtool accepted the verified Dell package for the selected WD19; unplug and reconnect the dock USB-C cable, then run status"
 	if text := strings.TrimSpace(string(output)); text != "" {
 		reason = summarize(text) + "; unplug and reconnect the dock USB-C cable, then run status"
+	}
+	if postInstallErr != nil {
+		reason += "; post-install verification unavailable: " + postInstallErr.Error()
+	} else if postInstall.Reason != "" {
+		reason += "; post-install verification: " + postInstall.Reason
 	}
 	return domain.UpdateCheck{
 		State:     "update_staged",
@@ -396,8 +503,8 @@ func fwupdToolEnvironment(stateDir string) []string {
 	}
 }
 
-func verifyFwupdToolVersion(ctx context.Context, runner CommandRunner, env []string, toolPath string) error {
-	output, err := runCommandWithEnv(ctx, runner, env, toolPath, "--version", "--json")
+func verifyFwupdToolVersion(ctx context.Context, runner CommandRunner, env []string, toolPath string, logger logging.Logger) error {
+	output, err := runLoggedFwupdCommand(ctx, runner, env, toolPath, logger, "--version", "--json")
 	if err != nil {
 		return commandError("fwupdtool --version --json", output, err)
 	}
@@ -424,17 +531,13 @@ func verifyFwupdToolVersion(ctx context.Context, runner CommandRunner, env []str
 	return nil
 }
 
-func selectFwupdWD19Device(ctx context.Context, runner CommandRunner, env []string, toolPath, serial string) (string, error) {
-	output, err := runCommandWithEnv(ctx, runner, env, toolPath, "--plugins", "dell_dock", "--json", "get-devices")
+func selectFwupdWD19Device(ctx context.Context, runner CommandRunner, env []string, toolPath, serial string, logger logging.Logger) (string, error) {
+	devices, err := readFwupdDevices(ctx, runner, env, toolPath, logger)
 	if err != nil {
-		return "", commandError("fwupdtool get-devices", output, err)
-	}
-	var response fwupdToolDevicesOutput
-	if err := json.Unmarshal(output, &response); err != nil {
-		return "", fmt.Errorf("cannot parse fwupdtool get-devices JSON: %w", err)
+		return "", err
 	}
 	matches := make([]fwupdToolDevice, 0, 1)
-	for _, device := range response.Devices {
+	for _, device := range devices {
 		if device.Plugin != "dell_dock" || device.Serial != serial || !hasWD19EmbeddedInstanceID(device.InstanceIDs) {
 			continue
 		}
@@ -449,7 +552,123 @@ func selectFwupdWD19Device(ctx context.Context, runner CommandRunner, env []stri
 	if len(matches) != 1 {
 		return "", fmt.Errorf("multiple matching WD19 devices were reported by fwupdtool")
 	}
+	logUpdateEvent(logger, "INFO", "fwupd.target.selected", map[string]string{
+		"device": matches[0].DeviceID,
+		"serial": serial,
+	})
 	return matches[0].DeviceID, nil
+}
+
+func readFwupdDevices(ctx context.Context, runner CommandRunner, env []string, toolPath string, logger logging.Logger) ([]fwupdToolDevice, error) {
+	args := []string{"--plugins", "dell_dock", "--json", "get-devices"}
+	output, err := runLoggedFwupdCommand(ctx, runner, env, toolPath, logger, args...)
+	if err != nil {
+		return nil, commandError("fwupdtool get-devices", output, err)
+	}
+	var response fwupdToolDevicesOutput
+	if err := json.Unmarshal(output, &response); err != nil {
+		return nil, fmt.Errorf("cannot parse fwupdtool get-devices JSON: %w", err)
+	}
+	return response.Devices, nil
+}
+
+func fwupdPostInstallVerification(ctx context.Context, runner CommandRunner, env []string, toolPath, deviceID string, candidate *domain.FirmwareCandidate, logger logging.Logger) (fwupdPostInstallResult, error) {
+	if candidate == nil || len(candidate.ComponentVersions) == 0 {
+		return fwupdPostInstallResult{}, nil
+	}
+	logUpdateEvent(logger, "INFO", "fwupdtool.postinstall.start", map[string]string{
+		"device": deviceID,
+	})
+	devices, err := readFwupdDevices(ctx, runner, env, toolPath, logger)
+	if err != nil {
+		logUpdateEvent(logger, "ERROR", "fwupdtool.postinstall.complete", map[string]string{
+			"device": deviceID,
+			"error":  err.Error(),
+		})
+		return fwupdPostInstallResult{}, err
+	}
+	result := evaluateFwupdPostInstall(devices, deviceID, candidate.ComponentVersions)
+	logUpdateEvent(logger, commandLogLevel(nil), "fwupdtool.postinstall.complete", map[string]string{
+		"device": deviceID,
+		"state":  string(result.State),
+		"reason": result.Reason,
+	})
+	return result, nil
+}
+
+func evaluateFwupdPostInstall(devices []fwupdToolDevice, parentID string, candidateVersions map[string]string) fwupdPostInstallResult {
+	targetDevices := make([]fwupdToolDevice, 0, len(devices))
+	foundParent := false
+	for _, device := range devices {
+		if device.Plugin == "dell_dock" && fwupdDeviceBelongsTo(device, parentID) {
+			targetDevices = append(targetDevices, device)
+			if device.DeviceID == parentID {
+				foundParent = true
+			}
+		}
+	}
+	if !foundParent {
+		return fwupdPostInstallResult{Reason: "selected WD19 parent is no longer reported"}
+	}
+	for _, device := range targetDevices {
+		if fwupdDeviceHasPendingUpdate(device) {
+			return fwupdPostInstallResult{
+				State:  fwupdPostInstallStaged,
+				Reason: "fwupd reports an update-pending state",
+			}
+		}
+	}
+	for component, want := range candidateVersions {
+		matches := make([]fwupdToolDevice, 0, 1)
+		for _, device := range targetDevices {
+			if fwupdDeviceComponent(device, parentID) == component {
+				matches = append(matches, device)
+			}
+		}
+		if len(matches) != 1 {
+			return fwupdPostInstallResult{Reason: fmt.Sprintf("component %s was reported %d times", component, len(matches))}
+		}
+		got := strings.TrimSpace(matches[0].Version)
+		if got != strings.TrimSpace(want) {
+			return fwupdPostInstallResult{Reason: fmt.Sprintf("component %s is %s, want %s", component, got, want)}
+		}
+	}
+	return fwupdPostInstallResult{
+		State:  fwupdPostInstallVerified,
+		Reason: "all candidate component versions match",
+	}
+}
+
+func fwupdDeviceBelongsTo(device fwupdToolDevice, parentID string) bool {
+	return device.DeviceID == parentID || device.ParentDeviceID == parentID || device.CompositeID == parentID
+}
+
+func fwupdDeviceHasPendingUpdate(device fwupdToolDevice) bool {
+	for _, value := range append(append([]string{}, device.Flags...), device.Problems...) {
+		if strings.Contains(strings.ToLower(strings.ReplaceAll(value, "_", "-")), "update-pending") {
+			return true
+		}
+	}
+	return false
+}
+
+func fwupdDeviceComponent(device fwupdToolDevice, parentID string) string {
+	text := strings.ToLower(strings.Join([]string{device.Name, device.Summary, strings.Join(device.InstanceIDs, " ")}, " "))
+	if device.DeviceID == parentID && hasWD19EmbeddedInstanceID(device.InstanceIDs) {
+		return domain.FirmwareComponentEmbeddedController
+	}
+	switch {
+	case strings.Contains(text, "package level") || strings.Contains(text, "&status"):
+		return domain.FirmwareComponentPackage
+	case strings.Contains(text, "rts5413") || strings.Contains(text, "generation 1") || strings.Contains(text, "pid_b06f"):
+		return domain.FirmwareComponentUSBHubGen1
+	case strings.Contains(text, "rts5487") || strings.Contains(text, "generation 2") || strings.Contains(text, "pid_b06e"):
+		return domain.FirmwareComponentUSBHubGen2
+	case strings.Contains(text, "vmm5331") || strings.Contains(text, "multi stream"):
+		return domain.FirmwareComponentMST
+	default:
+		return ""
+	}
 }
 
 func hasWD19EmbeddedInstanceID(instanceIDs []string) bool {

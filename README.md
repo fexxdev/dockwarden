@@ -94,6 +94,69 @@ and requires a physical reconnect. Unplug and reconnect the dock USB-C cable.
 Then run `status` and confirm the component versions. Do not interrupt power,
 USB-C, or the host during an active update.
 
+An `update_verified` result means that fwupd returned success, or returned an
+error after the dock reported every candidate component version. Dockwarden
+does not run a second install after an error. If verification is not possible,
+the result remains `update_failed` or `update_staged`; follow the recovery
+instructions and run `status` before any later apply.
+
+### WD19 update incident: 2026-08-05 (local time; 2026-08-04 UTC)
+
+Dockwarden performed one real update on a Dell Dock WD19 during development.
+The official Dell CAB was `DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.11.cab`.
+The CAB SHA-256 was verified before the install.
+
+The relevant pre-update `status` output was:
+
+```text
+package             01.00.47.01
+embedded_controller 01.01.00.13
+usb_hub_gen1        01.23
+usb_hub_gen2        01.62
+mst                 05.07.08
+```
+
+The fwupd command selected the WD19 device and began the write. Its output
+contained several device restart and wait phases, then stopped at:
+
+```text
+Writing…: 70.5%
+fwupdtool: exit status 1
+```
+
+The command did not report a clean completion. The old logger kept only the
+first 4096 bytes of command output, so the final low-level fwupd error is not
+recoverable from that run. The output shows several device restart and wait
+phases before the interruption. This pattern is consistent with a transient
+HID or USB re-enumeration loss, but it is not proof of the cause. fwupd also
+printed its warning that the package had not been validated; the log does not
+prove that this warning caused the interruption.
+
+After the recovery reconnect, a fresh read-only `status` reported:
+
+```text
+package             01.01.01.01
+embedded_controller 01.01.00.15
+usb_hub_gen1        01.23
+usb_hub_gen2        01.62
+mst                 05.07.08
+checks              []
+warnings            []
+```
+
+Therefore the firmware update was effective: the package and embedded
+controller changed to the CAB versions, while the hubs and MST were already at
+the CAB versions. The only confirmed process failure is fwupd's exit during
+the write progress. That exit was not proof that the dock remained on the old
+firmware. The update was verified only after the physical reconnect and the
+post-update version read.
+
+The original local evidence is preserved in
+`dockwarden-flash-20260805-0005.txt` and
+`dockwarden-recovery-status-20260805.txt`. Future logs preserve both the
+beginning and the end of fwupd output. Dockwarden never retries an install
+automatically after an error.
+
 Use JSON output for automation:
 
 ```sh
@@ -102,6 +165,12 @@ Use JSON output for automation:
 ```
 
 Use `--verbose` with text output to show the component list.
+
+Every command appends plain-text events to `dockwarden-log.txt` with user-only
+permissions. Use `--log-file PATH` to select another file. Update logs include
+the preflight result, selected DeviceId, fwupd commands, the head and tail of
+command output, post-install version verification, and the final state. Protect
+the file because it can contain dock identifiers.
 
 Exit codes are:
 

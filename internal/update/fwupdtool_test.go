@@ -41,6 +41,15 @@ type fakeEnvironmentCommandRunner struct {
 	respond  func(string, []string) ([]byte, error)
 }
 
+type fakeUpdateLogger struct {
+	events []string
+}
+
+func (f *fakeUpdateLogger) Log(_ string, event string, _ map[string]string) error {
+	f.events = append(f.events, event)
+	return nil
+}
+
 func (f *fakeEnvironmentCommandRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, append([]string{name}, args...))
 	if f.respond == nil {
@@ -71,6 +80,7 @@ func TestFwupdToolUpdaterAttestsTargetsAndBindsInstall(t *testing.T) {
 	payload := []byte("verified firmware payload")
 	configDir := t.TempDir()
 	toolPath := writeManagedFwupdTool(t, configDir)
+	logger := &fakeUpdateLogger{}
 	preflight := &fakeMacPreflighter{result: MacPreflightResult{
 		ServiceTag:      "TST0001",
 		ModuleSerial:    2000,
@@ -99,6 +109,7 @@ func TestFwupdToolUpdaterAttestsTargetsAndBindsInstall(t *testing.T) {
 		ConfigDir: configDir,
 		TempDir:   t.TempDir(),
 		Preflight: preflight,
+		Logger:    logger,
 	}
 
 	result := updater.Apply(context.Background(), matchingDock(), candidatePtr(candidateFor(payload)))
@@ -130,6 +141,18 @@ func TestFwupdToolUpdaterAttestsTargetsAndBindsInstall(t *testing.T) {
 	}
 	if !strings.Contains(result.Reason, "reconnect") {
 		t.Fatalf("expected reconnect instruction, got %q", result.Reason)
+	}
+	for _, event := range []string{"fwupd.ready", "firmware.download.complete", "macos.preflight.complete", "fwupdtool.command.start", "fwupdtool.command.complete", "firmware.apply.complete"} {
+		found := false
+		for _, got := range logger.events {
+			if got == event {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing log event %q in %v", event, logger.events)
+		}
 	}
 }
 
@@ -462,6 +485,91 @@ func TestFwupdToolUpdaterTreatsExitTwoAsUpdateFailure(t *testing.T) {
 	}
 }
 
+func TestFwupdToolUpdaterVerifiesVersionsAfterInstallError(t *testing.T) {
+	payload := []byte("verified firmware payload")
+	configDir := t.TempDir()
+	toolPath := writeManagedFwupdTool(t, configDir)
+	candidate := candidateFor(payload)
+	candidate.ComponentVersions = map[string]string{
+		domain.FirmwareComponentPackage:            "01.01.01.01",
+		domain.FirmwareComponentEmbeddedController: "01.01.00.15",
+		domain.FirmwareComponentUSBHubGen1:         "01.23",
+		domain.FirmwareComponentUSBHubGen2:         "01.62",
+		domain.FirmwareComponentMST:                "05.07.08",
+	}
+	getDevicesCalls := 0
+	runner := &fakeEnvironmentCommandRunner{respond: func(_ string, args []string) ([]byte, error) {
+		switch {
+		case isVersionCommand(args):
+			return []byte(fwupdVersionJSON("2.2.1", "2.2.1")), nil
+		case isGetDevicesCommand(args):
+			getDevicesCalls++
+			if getDevicesCalls == 1 {
+				return []byte(fwupdDevicesJSON(fwupdDeviceJSON(testFwupdDeviceID))), nil
+			}
+			return []byte(fwupdDevicesJSON(fwupdVerifiedDevicesJSON(testFwupdDeviceID))), nil
+		case isInstallCommand(args):
+			return []byte("Writing…: 70.5%\nfinal HID timeout"), errors.New("exit status 1")
+		default:
+			return nil, errors.New("unexpected fwupdtool command")
+		}
+	}}
+	result := (FwupdToolUpdater{
+		HTTP: &fakeHTTPDoer{response: &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(payload)),
+		}},
+		Runner:    runner,
+		ToolPath:  toolPath,
+		ConfigDir: configDir,
+		TempDir:   t.TempDir(),
+		Preflight: &fakeMacPreflighter{result: MacPreflightResult{ServiceTag: "TST0001", ModuleSerial: 2000, UpdateAvailable: true}},
+	}).Apply(context.Background(), matchingDock(), &candidate)
+	if result.State != "update_verified" {
+		t.Fatalf("post-install versions were not verified: %+v", result)
+	}
+	if !strings.Contains(result.Reason, "verified") || !strings.Contains(result.Reason, "exit status 1") {
+		t.Fatalf("verification reason lost the fwupd error: %q", result.Reason)
+	}
+	if getDevicesCalls != 2 {
+		t.Fatalf("get-devices calls = %d, want selection plus post-install verification", getDevicesCalls)
+	}
+}
+
+func TestEvaluateFwupdPostInstallKeepsPendingStateStaged(t *testing.T) {
+	var response fwupdToolDevicesOutput
+	if err := json.Unmarshal([]byte(fwupdDevicesJSON(fwupdVerifiedDevicesJSON(testFwupdDeviceID))), &response); err != nil {
+		t.Fatal(err)
+	}
+	response.Devices[0].Problems = []string{"update-pending"}
+	result := evaluateFwupdPostInstall(response.Devices, testFwupdDeviceID, testCandidateVersions())
+	if result.State != fwupdPostInstallStaged {
+		t.Fatalf("pending device was not kept staged: %+v", result)
+	}
+}
+
+func TestEvaluateFwupdPostInstallRejectsMismatchedVersion(t *testing.T) {
+	var response fwupdToolDevicesOutput
+	if err := json.Unmarshal([]byte(fwupdDevicesJSON(fwupdVerifiedDevicesJSON(testFwupdDeviceID))), &response); err != nil {
+		t.Fatal(err)
+	}
+	response.Devices[1].Version = "01.01.00.13-old"
+	result := evaluateFwupdPostInstall(response.Devices, testFwupdDeviceID, testCandidateVersions())
+	if result.State != "" || !strings.Contains(result.Reason, "embedded_controller") {
+		t.Fatalf("mismatched version was accepted: %+v", result)
+	}
+}
+
+func testCandidateVersions() map[string]string {
+	return map[string]string{
+		domain.FirmwareComponentPackage:            "01.01.01.01",
+		domain.FirmwareComponentEmbeddedController: "01.01.00.15",
+		domain.FirmwareComponentUSBHubGen1:         "01.23",
+		domain.FirmwareComponentUSBHubGen2:         "01.62",
+		domain.FirmwareComponentMST:                "05.07.08",
+	}
+}
+
 func writeManagedFwupdTool(t *testing.T, configDir string) string {
 	t.Helper()
 	prefix := filepath.Join(configDir, "dockwarden", "fwupd-2.2.1")
@@ -497,7 +605,7 @@ func writeManagedFwupdTool(t *testing.T, configDir string) string {
 	manifest := fwupdToolManifest{
 		FwupdVersion:      "2.2.1",
 		SourceCommit:      "61c7cf1873fedd78fa031e8a8829cb3413aaef46",
-		DarwinPatchSHA256: "1368ab6e7d9a15cb5e9d3a6e07f12b521996a72831f709078b0b2fbbe847d8fb",
+		DarwinPatchSHA256: "b98adbdd79b15b54df3066e27f616d976484f916527517cc8b6007f7ef2a7fb9",
 		BinarySHA256:      runtimeHashes["bin/fwupdtool"],
 		RuntimeSHA256:     runtimeHashes,
 	}
@@ -526,12 +634,39 @@ func fwupdDeviceJSON(deviceID string) string {
 	return "{\"Plugin\":\"dell_dock\",\"InstanceIds\":[\"USB\\\\VID_413C&PID_B06E&hub&embedded\"],\"Serial\":\"TST0001/00002000\",\"DeviceId\":\"" + deviceID + "\"}"
 }
 
+func fwupdVerifiedDevicesJSON(parentID string) string {
+	return strings.Join([]string{
+		"{\"Name\":\"Package level of Dell dock\",\"ParentDeviceId\":\"" + parentID + "\",\"CompositeId\":\"" + parentID + "\",\"Plugin\":\"dell_dock\",\"InstanceIds\":[\"USB\\\\VID_413C&PID_B06E&hub&status\"],\"Version\":\"01.01.01.01\"}",
+		"{\"Name\":\"WD19\",\"Plugin\":\"dell_dock\",\"InstanceIds\":[\"USB\\\\VID_413C&PID_B06E&hub&embedded\"],\"DeviceId\":\"" + parentID + "\",\"Version\":\"01.01.00.15\"}",
+		"{\"Name\":\"RTS5413 in Dell dock\",\"Summary\":\"USB 3.1 Generation 1 Hub\",\"ParentDeviceId\":\"" + parentID + "\",\"CompositeId\":\"" + parentID + "\",\"Plugin\":\"dell_dock\",\"InstanceIds\":[\"USB\\\\VID_413C&PID_B06F\"],\"Version\":\"01.23\"}",
+		"{\"Name\":\"RTS5487 in Dell dock\",\"Summary\":\"USB 3.1 Generation 2 Hub\",\"ParentDeviceId\":\"" + parentID + "\",\"CompositeId\":\"" + parentID + "\",\"Plugin\":\"dell_dock\",\"InstanceIds\":[\"USB\\\\VID_413C&PID_B06E\"],\"Version\":\"01.62\"}",
+		"{\"Name\":\"VMM5331 in Dell dock\",\"Summary\":\"Multi Stream Transport controller\",\"ParentDeviceId\":\"" + parentID + "\",\"CompositeId\":\"" + parentID + "\",\"Plugin\":\"dell_dock\",\"InstanceIds\":[\"MST-panamera-vmm5331-259\"],\"Version\":\"05.07.08\"}",
+	}, ",")
+}
+
 func TestFwupdSerialUsesUpstreamMinimumWidth(t *testing.T) {
 	if got := fwupdSerial("TST0001", 2000); got != "TST0001/00002000" {
 		t.Fatalf("short serial = %q", got)
 	}
 	if got := fwupdSerial("TST0001", 1234567890123456); got != "TST0001/1234567890123456" {
 		t.Fatalf("long serial = %q", got)
+	}
+}
+
+func TestSummarizePreservesCommandTail(t *testing.T) {
+	input := strings.Repeat("head-", 900) + "FINAL fwupd error: HID timeout"
+	got := summarize(input)
+	if !strings.Contains(got, "head-head-") {
+		t.Fatalf("summary lost the command head: %q", got)
+	}
+	if !strings.Contains(got, "FINAL fwupd error: HID timeout") {
+		t.Fatalf("summary lost the command tail: %q", got)
+	}
+	if !strings.Contains(got, "[output truncated") {
+		t.Fatalf("summary does not identify truncation: %q", got)
+	}
+	if len(got) > 4096 {
+		t.Fatalf("summary length = %d, want <= 4096", len(got))
 	}
 }
 

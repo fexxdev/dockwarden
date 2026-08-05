@@ -25,9 +25,14 @@ fwupd process before writing. Missing, multiple, malformed, or changed targets
 stop the update. A newer MST payload also stops both macOS writers.
 
 An `update_staged` result is not proof that the final firmware is active.
-Unplug and reconnect the dock, then run `dockwarden status`. Do not run an
-apply while the dock has unstable power, an unstable USB-C link, or a newer
-MST payload.
+Unplug and reconnect the dock, then run `dockwarden status`. `update_verified`
+means that the reported component versions match the candidate. Dockwarden
+never retries a failed install. Do not run an apply while the dock has unstable
+power, an unstable USB-C link, or a newer MST payload.
+
+Each command writes an append-only text log with mode `0600`. The log records
+the selected device, update phases, fwupd output, and failures. Treat it as
+diagnostic data because it can contain dock identifiers.
 
 The repository test suite, static checks, and build checks never apply a
 firmware update to physical hardware. The macOS CI build runs upstream tests,
