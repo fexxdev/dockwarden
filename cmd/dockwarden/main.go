@@ -18,7 +18,7 @@ import (
 	"github.com/fexxdev/dockwarden/internal/update"
 )
 
-const version = "0.3.0-dev"
+var version = "0.3.0-dev"
 const wd19LinuxDriverURL = "https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=389w0"
 const defaultLogFile = "dockwarden-log.txt"
 

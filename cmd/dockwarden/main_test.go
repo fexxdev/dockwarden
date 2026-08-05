@@ -17,3 +17,10 @@ func TestDarwinFwupdToolUpdaterConfiguresNativePreflight(t *testing.T) {
 		t.Fatalf("Darwin fwupdtool updater did not configure native preflight: %+v", updater)
 	}
 }
+
+func TestDefaultVersionIsLinkerInjectable(t *testing.T) {
+	versionPointer := &version
+	if *versionPointer != "0.3.0-dev" {
+		t.Fatalf("unexpected default version: %q", version)
+	}
+}
