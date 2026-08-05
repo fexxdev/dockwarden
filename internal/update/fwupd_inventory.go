@@ -207,7 +207,7 @@ func selectFwupdWD19DeviceForDock(devices []fwupdToolDevice, dock *domain.Dock) 
 		if device.Plugin != "dell_dock" || !hasWD19EmbeddedInstanceID(device.InstanceIDs) {
 			continue
 		}
-		if !fwupdSerialMatchesUSBSerial(device.Serial, wantSerial) {
+		if !fwupdWD19DeviceMatchesUSBSerial(device, devices, wantSerial) {
 			continue
 		}
 		if !fwupdDeviceIDPattern.MatchString(device.DeviceID) {
@@ -222,6 +222,24 @@ func selectFwupdWD19DeviceForDock(devices []fwupdToolDevice, dock *domain.Dock) 
 		return fwupdToolDevice{}, fmt.Errorf("multiple matching WD19 devices were reported by fwupdtool")
 	}
 	return matches[0], nil
+}
+
+func fwupdWD19DeviceMatchesUSBSerial(parent fwupdToolDevice, devices []fwupdToolDevice, usbSerial string) bool {
+	if fwupdSerialMatchesUSBSerial(parent.Serial, usbSerial) {
+		return true
+	}
+	for _, device := range devices {
+		if device.Plugin != "dell_dock" || device.DeviceID == parent.DeviceID {
+			continue
+		}
+		if !fwupdDeviceBelongsTo(device, parent.DeviceID) {
+			continue
+		}
+		if fwupdSerialMatchesUSBSerial(device.Serial, usbSerial) {
+			return true
+		}
+	}
+	return false
 }
 
 func fwupdSerialMatchesUSBSerial(fwupdSerial, usbSerial string) bool {

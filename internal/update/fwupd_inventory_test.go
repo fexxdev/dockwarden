@@ -26,6 +26,31 @@ func TestSelectFwupdWD19DeviceMatchesUSBSerial(t *testing.T) {
 	}
 }
 
+func TestSelectFwupdWD19DeviceMatchesComponentUSBSerial(t *testing.T) {
+	devices := []fwupdToolDevice{
+		{
+			Plugin:      "dell_dock",
+			Serial:      "5YVWRV2/3157879355419892",
+			DeviceID:    testFwupdDeviceID,
+			InstanceIDs: []string{"USB\\VID_413C&PID_B06E&hub&embedded"},
+		},
+		{
+			Plugin:         "dell_dock",
+			Serial:         "2000",
+			ParentDeviceID: testFwupdDeviceID,
+			CompositeID:    testFwupdDeviceID,
+			Name:           "RTS5487 in Dell dock",
+		},
+	}
+	parent, err := selectFwupdWD19DeviceForDock(devices, &domain.Dock{Serial: "2000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parent.DeviceID != testFwupdDeviceID {
+		t.Fatalf("selected DeviceId = %q", parent.DeviceID)
+	}
+}
+
 func TestSelectFwupdWD19DeviceRejectsAmbiguousInventory(t *testing.T) {
 	devices := []fwupdToolDevice{
 		{Plugin: "dell_dock", Serial: "2000/00002000", DeviceID: testFwupdDeviceID, InstanceIDs: []string{"USB\\VID_413C&PID_B06E&hub&embedded"}},
