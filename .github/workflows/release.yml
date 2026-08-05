@@ -1,0 +1,167 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            goos: darwin
+            goarch: arm64
+          - runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: arm64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.x'
+
+      - name: Validate release tag
+        shell: sh
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "invalid release tag: $GITHUB_REF_NAME" >&2; exit 2 ;;
+          esac
+          grep -F "## [$version] - " CHANGELOG.md
+
+      - name: Test
+        run: GOCACHE="$RUNNER_TEMP/go-cache" go test ./...
+
+      - name: Vet
+        run: GOCACHE="$RUNNER_TEMP/go-cache" go vet ./...
+
+      - name: Install macOS fwupd build dependencies
+        if: matrix.goos == 'darwin'
+        run: brew install gcab glib gnutls json-glib libjcat libusb libxmlb meson ninja pkg-config rust
+
+      - name: Build managed macOS fwupdtool
+        if: matrix.goos == 'darwin'
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/dockwarden-runtime/dockwarden/fwupd-2.2.1"
+          mkdir -p "$(dirname "$prefix")"
+          tools/fwupd-macos/build-fwupdtool.sh "$prefix"
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" LANG=C LC_ALL=C \
+            "$prefix/bin/fwupdtool" --version --json
+          DOCKWARDEN_TEST_FWUPD_PREFIX="$prefix" \
+            GOCACHE="$RUNNER_TEMP/go-cache" go test ./internal/update -run '^TestManagedFwupdToolPrefix$' -count=1
+
+      - name: Build dockwarden
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          binary="$RUNNER_TEMP/dockwarden-bin"
+          if [ "${{ matrix.goos }}" = darwin ]; then
+            CGO_ENABLED=1 GOCACHE="$RUNNER_TEMP/go-cache" \
+              go build -ldflags "-X main.version=$version" -o "$binary" ./cmd/dockwarden
+          else
+            CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
+              GOCACHE="$RUNNER_TEMP/go-cache" \
+              go build -ldflags "-X main.version=$version" -o "$binary" ./cmd/dockwarden
+          fi
+          test "$("$binary" --version)" = "$version"
+
+      - name: Package archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release"
+          if [ "${{ matrix.goos }}" = darwin ]; then
+            tools/release/package.sh "$GITHUB_REF_NAME" "${{ matrix.goos }}" "${{ matrix.goarch }}" \
+              "$RUNNER_TEMP/dockwarden-bin" "$RUNNER_TEMP/release" \
+              "$RUNNER_TEMP/dockwarden-runtime/dockwarden/fwupd-2.2.1"
+          else
+            tools/release/package.sh "$GITHUB_REF_NAME" "${{ matrix.goos }}" "${{ matrix.goarch }}" \
+              "$RUNNER_TEMP/dockwarden-bin" "$RUNNER_TEMP/release"
+          fi
+
+      - name: Verify packaged archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/release/dockwarden-$GITHUB_REF_NAME-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          verify_dir="$RUNNER_TEMP/package-check"
+          mkdir -p "$verify_dir"
+          tar -xzf "$archive" -C "$verify_dir"
+          test "$("$verify_dir/dockwarden" --version)" = "${GITHUB_REF_NAME#v}"
+          if [ "${{ matrix.goos }}" = darwin ]; then
+            env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" LANG=C LC_ALL=C \
+              "$verify_dir/fwupd-2.2.1/bin/fwupdtool" --version --json
+            if find "$verify_dir/fwupd-2.2.1/bin" "$verify_dir/fwupd-2.2.1/lib" -type f \
+              -exec otool -L {} \; | grep -F "$RUNNER_TEMP/dockwarden-runtime/dockwarden/fwupd-2.2.1" >/dev/null; then
+              echo "packaged fwupdtool contains a build-machine path" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ runner.temp }}/release/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums and release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- *.tar.gz > SHA256SUMS
+          cp "$GITHUB_WORKSPACE/tools/release/install.sh" install.sh
+          cp "$GITHUB_WORKSPACE/CHANGELOG.md" CHANGELOG.md
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --title "Dockwarden $GITHUB_REF_NAME" \
+              --notes-file CHANGELOG.md
+          fi
