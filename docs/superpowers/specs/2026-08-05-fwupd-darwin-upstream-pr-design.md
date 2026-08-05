@@ -15,7 +15,10 @@ The pull request will target the current fwupd main branch. It will include:
 - deterministic HID selection by vendor ID, product ID, and device serial;
 - safe close and reopen handling after a USB reset or re-enumeration;
 - Meson linkage for the Apple `CoreFoundation` and `IOKit` frameworks;
-- non-hardware regression tests and macOS build coverage;
+- regression coverage for the Dell Dock device-type and composite-device
+  paths;
+- Darwin-safe plugin ordering rules when Linux-only plugins are absent;
+- non-hardware regression tests and macOS build and test coverage;
 - documentation of the supported macOS path and its hardware limits.
 
 The pull request will not include:
@@ -42,6 +45,12 @@ The Dell plugin keeps its normal fwupd device selection and transaction flow.
 No environment variable or Dockwarden-specific target contract is added to
 the upstream plugin.
 
+The Dell Dock plugin must not reference Linux-only `synaptics_mst` or
+`thunderbolt` ordering rules on Darwin when those plugins are not built. The
+plugin keeps its existing Dell device selection and re-reads the device type
+when the EC is opened. Tests cover the regression that caused the device type
+to remain unknown after the safe struct parser migration.
+
 ## Verification
 
 The implementation is complete only when:
@@ -50,9 +59,11 @@ The implementation is complete only when:
 2. Non-hardware tests pass on the development host and in CI.
 3. Tests cover serial matching, ambiguous matching, report errors, close, and
    one re-open retry without accessing a physical dock.
-4. A read-only macOS `fwupdtool --plugins dell_dock get-devices` check is run
+4. Dell Dock tests cover the device-type regression, composite children, and
+   absent Linux-only plugin rules.
+5. A read-only macOS `fwupdtool --plugins dell_dock get-devices` check is run
    when hardware is available. It must not run `install`.
-5. The PR body links issue #10564 and states that this is not a guarantee for
-   every composite dock model.
+6. The PR body links issues #10564 and #10697, plus the landed device-type
+   fix, and states that this is not a guarantee for every composite dock model.
 
 No firmware flash is part of this work.
