@@ -23,6 +23,7 @@ No unreleased changes yet.
 - A read-only macOS HID permission probe and clear Input Monitoring instructions.
 - Automatic Linux `fwupd` installation through the detected distribution package manager.
 - A recovery matrix for staged, interrupted, partial, non-enumerating, and repeated-failure states.
+- Official Dell download, recovery, support, and WD19 documentation links in the README.
 
 ### Changed
 

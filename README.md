@@ -15,6 +15,7 @@ macOS and Linux. The current target is the Dell Dock WD19.
 - [Install](#install)
 - [Does it work?](#does-it-work)
 - [Recovery](#recovery)
+- [Dell resources](#dell-resources)
 - [What it does](#what-it-does)
 - [Safety model](#safety-model)
 - [Firmware source](#firmware-source)
@@ -166,6 +167,61 @@ path is required.
 Never use a raw `fwupdtool install` command, a forced downgrade, or a CAB from
 an unknown source. Keep the recovery log because it can contain dock
 identifiers.
+
+## Dell resources
+
+These are official Dell links for the WD19. Dell can redirect a page to your
+region. The product page is the source of truth when a direct file link changes.
+
+### Downloads
+
+- [WD19 Drivers & Downloads](https://www.dell.com/support/product-details/en-us/product/dell-wd19-130w-dock/drivers)
+- [WD19/WD22/HD22/WD25/SD25 firmware utility, driver 389W0](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=389w0)
+- [Direct official CAB download](https://dl.dell.com/FOLDER14009221M/1/DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.11.cab) — SHA-256: `f476fda34db1299da1c251bf04144d892a897a81fad0a40ee0c9771471f41614`
+- [Direct official Linux BIN download](https://dl.dell.com/FOLDER14009249M/1/DellDockFirmwarePackage_WD19_WD22_HD22_WD25_SD25_01.01.11.bin) — SHA-256: `f7ab798d4df984e966e64cd6dc8caaaff40f46ad7fe3044f761629ace7a6199b`
+- [Latest WD19/WD22TB4 Windows firmware utility, driver NKJG6 (01.01.14.01)](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=nkjg6)
+- [Previous WD19/WD22TB4 Windows firmware utility, driver XVXN7 (01.01.13.01)](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=xvxn7)
+
+The CAB and BIN are Dell files. Dockwarden uses the verified CAB through its
+fwupd backend. Do not run either file directly or mix files from different
+releases. The Windows utilities are reference and recovery links only;
+Dockwarden never executes a Dell `.exe`. Check the checksum on the Dell driver
+page before use.
+
+### Recovery and troubleshooting
+
+- [WD19 firmware update failure and power-cycle procedure (KB 000184585)](https://www.dell.com/support/kbdoc/en-us/000184585/ec-firmware-of-dell-dock-station-wd19x-updated-failed-on-generation-8-platforms-with-windows-10-20h1-or-higher)
+- [WD19 BIOS settings and driver installation troubleshooting (KB 000193792)](https://www.dell.com/support/kbdoc/en-us/000193792/dell-wd19-series-dock-bios-settings-and-driver-installation-for-troubleshooting)
+- [Dell Dock cannot use LAN or update firmware (KB 000289260)](https://www.dell.com/support/kbdoc/en-us/000289260/dell-dock-cannot-use-lan-port-or-update-dock-firmware)
+- [Dock no-power troubleshooting guide (KB 000223850)](https://www.dell.com/support/kbdoc/en-us/000223850/dell-usb-c-and-thunderbolt-docks-no-power-troubleshooting-guide)
+- [Power-cycle guidance after a dock firmware update (KB 000137390)](https://www.dell.com/support/kbdoc/en-us/000137390/dell-wired-docks-how-long-can-you-wait-after-updating-the-firmware-to-power-cycle-the-dock)
+- [SupportAssist dock diagnostics (KB 000203763)](https://www.dell.com/support/kbdoc/en-us/000203763/how-to-use-supportassist-docking-station-diagnostics)
+- [How to check a wired dock firmware version (KB 000129828)](https://www.dell.com/support/kbdoc/en-us/000129828/dell-usb-type-c-thunderbolt-docks-checking-the-current-firmware-version-on-your-wired-dock)
+- [USB devices affected after dock firmware updates (KB 000224626)](https://www.dell.com/support/kbdoc/en-us/000224626/usb-devices-connected-to-dell-docks-may-experience-issues-after-updating-the-dock-firmware)
+- [USB audio issues after dock firmware updates (KB 000224068)](https://www.dell.com/support/kbdoc/en-us/000224068/usb-audio-issues-on-dell-docks-after-updating-firmware)
+- [Dell Docking Stations Support Library](https://www.dell.com/support/contents/en-us/category/product-support/self-support-knowledgebase/docking-stations)
+- [All WD19 support articles](https://www.dell.com/support/product-details/en-us/product/dell-wd19-130w-dock/resources/articles)
+
+Use Dell's power-cycle procedure when the dock has no power or does not
+enumerate. Use Dockwarden's recovery table first. It records the result before
+you consider another update.
+
+### Manuals and technical documentation
+
+- [WD19 User Guide](https://www.dell.com/support/manuals/en-us/dell-wd19-130w-dock/wd19_userguide/)
+- [WD19 firmware update chapter in the User Guide](https://www.dell.com/support/manuals/en-us/dell-wd19-130w-dock/wd19_userguide/dell-docking-station-firmware-update?guid=guid-a9c2c1cc-80be-4176-bba7-6c574ec91d88)
+- [WD19 Manuals & Documents index](https://www.dell.com/support/product-details/en-us/product/dell-wd19-130w-dock/resources/manuals)
+- [WD19 Administrator's Guide (PDF)](https://downloads.dell.com/topicspdf/dell-wd19-130w-dock_Administrator-Guide_en-us.pdf)
+- [WD19 Quick Start Guide (PDF)](https://dl.dell.com/manuals/all-products/esuprt_electronics/esuprt_docking_stations/dell-wd19-130w-dock_setup-guide_en-us.pdf)
+- [Guide to Dell docking stations (KB 000124295)](https://www.dell.com/support/kbdoc/en-us/000124295/guide-to-dell-docking-stations)
+- [USB and USB-C dock compatibility list (KB 000125885)](https://www.dell.com/support/kbdoc/en-us/000125885/usb-and-usb-type-c-dock-compatibility-list)
+- [Dell Commercial Docking Compatibility Guide (PDF)](https://www.delltechnologies.com/asset/en-in/products/electronics-and-accessories/technical-support/dell_docking_compatibility_guide.pdf)
+- [SupportAssist for Home PCs](https://www.dell.com/support/contents/en-us/article/product-support/self-support-knowledgebase/software-and-downloads/support-assist/SupportAssist-for-Home)
+- [Dell Support home and contact options](https://www.dell.com/support/home/en-us)
+
+The Administrator's Guide documents the Dell update states, component version
+checks, logs, error handling, and post-update reconnect. It is the best Dell
+reference for service and recovery work.
 
 ## What it does
 
