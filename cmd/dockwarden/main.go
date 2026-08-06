@@ -65,8 +65,8 @@ func main() {
 		dependencies.Inspector = discovery.MacInspector{
 			Firmware: update.FwupdToolFirmwareReader{Client: fwupdClient},
 		}
-		dependencies.PermissionCheck = func(ctx context.Context) error {
-			return (update.FwupdToolPermissionChecker{Client: fwupdClient}).Check(ctx)
+		dependencies.PermissionCheckForDock = func(ctx context.Context, dock *domain.Dock) error {
+			return (update.FwupdToolPermissionChecker{Client: fwupdClient}).CheckForDock(ctx, dock)
 		}
 		dependencies.Updater = newDarwinFwupdToolUpdater(httpClient, fwupdClient)
 		driverURL = wd19LinuxDriverURL

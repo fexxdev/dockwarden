@@ -151,10 +151,12 @@ func TestRunLogsCommandLifecycle(t *testing.T) {
 
 func TestRunReportsMacOSPermissionInstructions(t *testing.T) {
 	inspector := &fakeInspector{report: detectedReport()}
+	var checkedDock *domain.Dock
 	var out bytes.Buffer
 	code := Run(context.Background(), cli.Options{Command: "doctor", JSON: true}, Dependencies{
 		Inspector: inspector,
-		PermissionCheck: func(context.Context) error {
+		PermissionCheckForDock: func(_ context.Context, dock *domain.Dock) error {
+			checkedDock = dock
 			return errors.New("macOS denied direct HID access: IOKit 0x2c")
 		},
 		Out: &out,
@@ -179,7 +181,7 @@ func TestRunReportsMacOSPermissionInstructions(t *testing.T) {
 			foundCheck = true
 		}
 	}
-	if !foundWarning || !foundCheck {
+	if checkedDock == nil || !foundWarning || !foundCheck {
 		t.Fatalf("permission warning/check missing: warnings=%v checks=%v", report.Warnings, report.Checks)
 	}
 }

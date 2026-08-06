@@ -164,11 +164,24 @@ func (p FwupdToolPreflight) Check(ctx context.Context, dock *domain.Dock, candid
 }
 
 func (p FwupdToolPermissionChecker) Check(ctx context.Context) error {
+	return p.check(ctx, nil)
+}
+
+// CheckForDock distinguishes a missing dock from a permission failure when
+// native discovery already found a dock.
+func (p FwupdToolPermissionChecker) CheckForDock(ctx context.Context, dock *domain.Dock) error {
+	return p.check(ctx, dock)
+}
+
+func (p FwupdToolPermissionChecker) check(ctx context.Context, dock *domain.Dock) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if _, err := p.Client.readDevices(ctx); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "no detected devices") {
+			if dock != nil && strings.TrimSpace(dock.Serial) != "" {
+				return fmt.Errorf("fwupdtool HID permission probe failed: no detected devices while the detected dock is present; check macOS Input Monitoring permission")
+			}
 			return nil
 		}
 		if fwupdHIDPermissionError(err) {

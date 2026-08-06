@@ -30,13 +30,14 @@ type FirmwareUpdaterReadiness interface {
 }
 
 type Dependencies struct {
-	Inspector       Inspector
-	Updates         UpdateChecker
-	Updater         FirmwareUpdater
-	PermissionCheck func(context.Context) error
-	Logger          logging.Logger
-	Out             io.Writer
-	Err             io.Writer
+	Inspector              Inspector
+	Updates                UpdateChecker
+	Updater                FirmwareUpdater
+	PermissionCheck        func(context.Context) error
+	PermissionCheckForDock func(context.Context, *domain.Dock) error
+	Logger                 logging.Logger
+	Out                    io.Writer
+	Err                    io.Writer
 }
 
 func Run(ctx context.Context, options cli.Options, dependencies Dependencies) int {
@@ -64,13 +65,15 @@ func Run(ctx context.Context, options cli.Options, dependencies Dependencies) in
 		"dock":     reportDockName(report),
 	})
 	var permissionErr error
-	if dependencies.PermissionCheck != nil {
+	if dependencies.PermissionCheckForDock != nil {
+		permissionErr = dependencies.PermissionCheckForDock(ctx, report.Dock)
+	} else if dependencies.PermissionCheck != nil {
 		permissionErr = dependencies.PermissionCheck(ctx)
-		if permissionErr != nil {
-			warning := macOSPermissionWarning(permissionErr)
-			report.Warnings = append(report.Warnings, warning)
-			logEvent(dependencies.Logger, "WARN", "permissions.failed", map[string]string{"error": permissionErr.Error()})
-		}
+	}
+	if permissionErr != nil {
+		warning := macOSPermissionWarning(permissionErr)
+		report.Warnings = append(report.Warnings, warning)
+		logEvent(dependencies.Logger, "WARN", "permissions.failed", map[string]string{"error": permissionErr.Error()})
 	}
 
 	if options.Command == "doctor" {

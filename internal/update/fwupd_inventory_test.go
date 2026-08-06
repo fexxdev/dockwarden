@@ -282,6 +282,28 @@ func TestFwupdToolPermissionCheckerAllowsNoDock(t *testing.T) {
 	}
 }
 
+func TestFwupdToolPermissionCheckerReportsNoDevicesWithDock(t *testing.T) {
+	configDir := t.TempDir()
+	toolPath := writeManagedFwupdTool(t, configDir)
+	runner := &fakeEnvironmentCommandRunner{respond: func(_ string, args []string) ([]byte, error) {
+		if isVersionCommand(args) {
+			return []byte(fwupdVersionJSON("2.2.1", "2.2.1")), nil
+		}
+		if isGetDevicesCommand(args) {
+			return []byte(`{"Error":{"Message":"No detected devices"}}`), errors.New("exit status 2")
+		}
+		return nil, errors.New("unexpected command")
+	}}
+	dock := &domain.Dock{Model: "Dell Dock WD19", Serial: "2000"}
+	err := (FwupdToolPermissionChecker{Client: FwupdToolClient{
+		Runner: runner, ToolPath: toolPath, ConfigDir: configDir, TempDir: t.TempDir(),
+	}}).CheckForDock(context.Background(), dock)
+	if err == nil || !strings.Contains(err.Error(), "permission probe failed") ||
+		!strings.Contains(err.Error(), "Input Monitoring") {
+		t.Fatalf("no-device result with a dock was not reported as a permission failure: %v", err)
+	}
+}
+
 func TestFwupdToolPreflightReportsEqualVersions(t *testing.T) {
 	configDir := t.TempDir()
 	toolPath := writeManagedFwupdTool(t, configDir)

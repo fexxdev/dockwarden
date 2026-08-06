@@ -18,6 +18,8 @@ All notable changes to `dockwarden` are recorded here.
   diagnostics commit.
 - Enumerate macOS USB HID endpoints through IOKit when libusb returns no
   devices, and bind each writable HID session to its serial and LocationID.
+- Report a stale macOS HID permission when native discovery sees a dock but
+  fwupd reports no devices.
 
 ## [0.3.0] - 2026-08-05
 
