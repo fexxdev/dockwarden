@@ -1,0 +1,38 @@
+{
+  "skill_name": "dockwarden-macos-hid-diagnostics",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "macOS dice No detected devices e nei log c'è IOKit 0xe00002e2. Ho abilitato fwupdtool in Input Monitoring.",
+      "expected_output": "The agent checks the exact binary path and CDHash, then separates TCC from sandbox and asks for no flash.",
+      "files": [],
+      "expectations": [
+        "The diagnosis checks the exact executable path rather than trusting the label fwupdtool.",
+        "The diagnosis distinguishes a sandbox failure from a TCC failure.",
+        "The proposed probe is get-devices only and records exit code and JSON shape."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "In sandbox get-devices fails, but from my normal Terminal it finds WD19. Fix the interpretation.",
+      "expected_output": "The agent identifies the execution-context difference and does not change HID transport code without a real-terminal failure.",
+      "files": [],
+      "expectations": [
+        "The result is labeled as a sandbox limitation until the real-terminal probe fails.",
+        "The agent reports both probe contexts.",
+        "No write or permission database change is proposed."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Il binario aggiornato è in /private/tmp, ma Input Monitoring mostra un altro fwupdtool sotto Library/Application Support. Quale devo testare?",
+      "expected_output": "The agent compares path, signature, and CDHash, then tests the exact updated binary and explains the stale managed runtime.",
+      "files": [],
+      "expectations": [
+        "The response names the path mismatch as a likely cause.",
+        "The response checks CDHash and TCC identity without editing TCC.",
+        "The response tests only the updated binary with get-devices."
+      ]
+    }
+  ]
+}

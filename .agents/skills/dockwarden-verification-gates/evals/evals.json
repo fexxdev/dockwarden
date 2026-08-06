@@ -1,0 +1,38 @@
+{
+  "skill_name": "dockwarden-verification-gates",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "La build è passata, ma il binario che ho lanciato viene da Library/Application Support e non dal nuovo build directory. Posso dire che il fix funziona?",
+      "expected_output": "The agent rejects the claim until artifact identity is matched and requests a runtime test of the new binary.",
+      "files": [],
+      "expectations": [
+        "The response identifies the stale-runtime problem.",
+        "The response requires path, source commit, and CDHash comparison.",
+        "The response does not call the fix verified from the build alone."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Il comando ha prodotto JSON, ma exit code 2 e {\"Error\":{\"Code\":9}}. Il test è passato?",
+      "expected_output": "The agent marks the test as failed and explains that an error JSON is not a successful result.",
+      "files": [],
+      "expectations": [
+        "The exit code is treated as failure.",
+        "The Error object is not treated as a device list.",
+        "The report preserves stdout and stderr evidence."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Il writer ha raggiunto il 70% e poi si è fermato. Dopo il replug la dock appare, ma non ho ancora confrontato le versioni.",
+      "expected_output": "The agent labels the firmware result unknown or partial and requires post-inventory and version comparison.",
+      "files": [],
+      "expectations": [
+        "The response does not call the update successful from 70% progress.",
+        "The response requires writer exit status and component-level evidence.",
+        "The response requires read-only post-inventory before a success claim."
+      ]
+    }
+  ]
+}
