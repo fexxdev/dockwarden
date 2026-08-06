@@ -12,6 +12,8 @@ All notable changes to `dockwarden` are recorded here.
 - Bind the explicit install path to the read-only selected fwupd `DeviceId`.
 - Add tests for serial matching, component inventory, version comparison, and
   read-only preflight.
+- Report the physical Gen1 USB endpoint when fwupd cannot expose its HID
+  serial, while keeping firmware apply fail-closed.
 
 ## [0.3.0] - 2026-08-05
 

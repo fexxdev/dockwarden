@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -85,6 +86,57 @@ func TestFwupdInventoryObservationsRequireAllComponents(t *testing.T) {
 	}
 }
 
+func TestPhysicalUSBHubGen1DeviceUsesTheSelectedDockTopology(t *testing.T) {
+	dock := &domain.Dock{
+		Serial: "2000",
+		Devices: []domain.USBDevice{
+			{VendorID: 0x413c, ProductID: 0xb06e, Location: "00100000", Product: "Dell dock"},
+			{VendorID: 0x413c, ProductID: 0xb06e, Location: "00150000", ParentLocation: "00100000", Product: "Dell Dock WD19", Serial: "2000"},
+			{VendorID: 0x413c, ProductID: 0xb06f, Location: "00135000", ParentLocation: "00100000", DescriptorVersion: "1.23", Product: "Dell dock"},
+			{VendorID: 0x413c, ProductID: 0xb06e, Location: "00200000", Product: "Dell dock"},
+			{VendorID: 0x413c, ProductID: 0xb06f, Location: "00235000", ParentLocation: "00200000", DescriptorVersion: "9.99", Product: "Dell dock"},
+		},
+	}
+	device, ok := physicalUSBHubGen1Device(dock)
+	if !ok {
+		t.Fatal("expected physical Gen1 observation")
+	}
+	if device.DescriptorVersion != "1.23" || device.Location != "00135000" {
+		t.Fatalf("unexpected physical Gen1 device: %+v", device)
+	}
+}
+
+func TestEnrichFwupdInventoryErrorKeepsWriteEvidenceReadOnly(t *testing.T) {
+	dock := &domain.Dock{
+		Serial: "2000",
+		Devices: []domain.USBDevice{
+			{VendorID: 0x413c, ProductID: 0xb06e, Location: "00100000", Product: "Dell dock"},
+			{VendorID: 0x413c, ProductID: 0xb06e, Location: "00150000", ParentLocation: "00100000", Product: "Dell Dock WD19", Serial: "2000"},
+			{VendorID: 0x413c, ProductID: 0xb06f, Location: "00135000", ParentLocation: "00100000", DescriptorVersion: "1.23", Product: "Dell dock"},
+		},
+	}
+	err := enrichFwupdInventoryError(errors.New("selected WD19 has no usb_hub_gen1 version in fwupdtool output"), dock)
+	if !strings.Contains(err.Error(), "00135000") || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("missing physical read-only evidence: %v", err)
+	}
+}
+
+func TestPhysicalUSBHubGen1DeviceHandlesIntermediateUSBHub(t *testing.T) {
+	dock := &domain.Dock{
+		Serial: "2000",
+		Devices: []domain.USBDevice{
+			{VendorID: 0x413c, ProductID: 0xb06e, Location: "00100000", Product: "Dell dock"},
+			{VendorID: 0x413c, ProductID: 0xb06e, Location: "00150000", ParentLocation: "00100000", Product: "Dell Dock WD19", Serial: "2000"},
+			{VendorID: 0x0bda, ProductID: 0x0413, Location: "00130000", ParentLocation: "00100000", Product: "Dell dock"},
+			{VendorID: 0x413c, ProductID: 0xb06f, Location: "00135000", ParentLocation: "00130000", DescriptorVersion: "1.01", Product: "Dell dock"},
+		},
+	}
+	device, ok := physicalUSBHubGen1Device(dock)
+	if !ok || device.Location != "00135000" {
+		t.Fatalf("selected Gen1 device = %+v", device)
+	}
+}
+
 func TestFwupdToolPreflightReadsOnlyInventory(t *testing.T) {
 	configDir := t.TempDir()
 	toolPath := writeManagedFwupdTool(t, configDir)
@@ -147,6 +199,47 @@ func TestFwupdToolFirmwareReaderReadsSelectedInventory(t *testing.T) {
 		if observation.Source != "fwupdtool" || observation.Confidence != "direct" {
 			t.Fatalf("unexpected observation provenance: %+v", observation)
 		}
+	}
+}
+
+func TestFwupdToolFirmwareReaderReportsPhysicalGen1EvidenceOnIncompleteFwupdInventory(t *testing.T) {
+	configDir := t.TempDir()
+	toolPath := writeManagedFwupdTool(t, configDir)
+	devices := mustFwupdDevices(t, fwupdVerifiedDevicesJSON(testFwupdDeviceID))
+	devices = slices.DeleteFunc(devices, func(device fwupdToolDevice) bool {
+		return fwupdDeviceComponent(device, testFwupdDeviceID) == domain.FirmwareComponentUSBHubGen1
+	})
+	devicesJSON, err := json.Marshal(fwupdToolDevicesOutput{Devices: devices})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeEnvironmentCommandRunner{respond: func(_ string, args []string) ([]byte, error) {
+		switch {
+		case isVersionCommand(args):
+			return []byte(fwupdVersionJSON("2.2.1", "2.2.1")), nil
+		case isGetDevicesCommand(args):
+			return devicesJSON, nil
+		default:
+			return nil, errors.New("unexpected write command")
+		}
+	}}
+	dock := &domain.Dock{
+		Model:     "Dell Dock WD19",
+		VendorID:  0x413c,
+		ProductID: 0xb06e,
+		Serial:    "2000",
+		Devices: []domain.USBDevice{
+			{VendorID: 0x413c, ProductID: 0xb06e, Location: "00100000", Product: "Dell dock"},
+			{VendorID: 0x413c, ProductID: 0xb06e, Location: "00150000", ParentLocation: "00100000", Product: "Dell Dock WD19", Serial: "2000"},
+			{VendorID: 0x413c, ProductID: 0xb06f, Location: "00135000", ParentLocation: "00130000", DescriptorVersion: "1.01", Product: "Dell dock"},
+			{VendorID: 0x0bda, ProductID: 0x0413, Location: "00130000", ParentLocation: "00100000", Product: "Dell dock"},
+		},
+	}
+	_, err = (FwupdToolFirmwareReader{Client: FwupdToolClient{
+		Runner: runner, ToolPath: toolPath, ConfigDir: configDir, TempDir: t.TempDir(),
+	}}).Read(context.Background(), dock)
+	if err == nil || !strings.Contains(err.Error(), "00135000") || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("missing physical Gen1 evidence: %v", err)
 	}
 }
 

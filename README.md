@@ -241,6 +241,13 @@ fwupd Darwin branch. That plugin owns the Apple HID transport and the Dell
 protocol. Dockwarden selects one exact WD19 DeviceId from JSON, compares the
 USB serial, and verifies every candidate component after the install.
 
+Some WD19 units expose the Gen1 hub as USB `413c:b06f` without a HID serial.
+macOS can still report its exact USB location, such as `00135000`, and its USB
+descriptor version. Dockwarden shows this as physical read-only evidence. It
+never treats that descriptor as firmware evidence and never uses it to permit
+a write. The state remains `version_check_unavailable` until fwupd reads the
+Gen1 endpoint directly.
+
 Dockwarden does not execute Dell Windows `.exe` packages. It does not accept
 arbitrary payloads, forced downgrades, or unverified firmware files. A USB
 descriptor version is not a firmware version.

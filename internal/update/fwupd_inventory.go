@@ -123,7 +123,11 @@ func (r FwupdToolFirmwareReader) Read(ctx context.Context, dock *domain.Dock) ([
 		return nil, err
 	}
 	logUpdateEvent(r.Client.Logger, "INFO", "fwupd.target.selected", map[string]string{"device": parent.DeviceID})
-	return fwupdInventoryObservations(devices, parent.DeviceID)
+	observations, err := fwupdInventoryObservations(devices, parent.DeviceID)
+	if err != nil {
+		return nil, enrichFwupdInventoryError(err, dock)
+	}
+	return observations, nil
 }
 
 func (p FwupdToolPreflight) Check(ctx context.Context, dock *domain.Dock, candidate *domain.FirmwareCandidate) (MacPreflightResult, error) {
@@ -147,7 +151,7 @@ func (p FwupdToolPreflight) Check(ctx context.Context, dock *domain.Dock, candid
 	logUpdateEvent(p.Client.Logger, "INFO", "fwupd.target.selected", map[string]string{"device": parent.DeviceID})
 	observations, err := fwupdInventoryObservations(devices, parent.DeviceID)
 	if err != nil {
-		return MacPreflightResult{}, err
+		return MacPreflightResult{}, enrichFwupdInventoryError(err, dock)
 	}
 	updateAvailable, err := compareFwupdCandidate(observations, candidate)
 	if err != nil {
@@ -317,4 +321,84 @@ func compareFwupdCandidate(observations []domain.FirmwareObservation, candidate 
 		}
 	}
 	return updateAvailable, nil
+}
+
+func enrichFwupdInventoryError(err error, dock *domain.Dock) error {
+	if err == nil || dock == nil || !strings.Contains(err.Error(), "usb_hub_gen1") {
+		return err
+	}
+	device, ok := physicalUSBHubGen1Device(dock)
+	if !ok {
+		return err
+	}
+	return fmt.Errorf(
+		"%w; physical USB hub Gen1 413c:b06f at location %s reports descriptor version %s; descriptor evidence is read-only and cannot authorize firmware writes",
+		err,
+		device.Location,
+		strings.TrimSpace(device.DescriptorVersion),
+	)
+}
+
+func physicalUSBHubGen1Device(dock *domain.Dock) (domain.USBDevice, bool) {
+	if dock == nil || strings.TrimSpace(dock.Serial) == "" {
+		return domain.USBDevice{}, false
+	}
+	byLocation := make(map[string]domain.USBDevice, len(dock.Devices))
+	for _, device := range dock.Devices {
+		if device.Location != "" {
+			byLocation[device.Location] = device
+		}
+	}
+	var targetRoot string
+	for _, device := range dock.Devices {
+		if device.VendorID != 0x413c || device.ProductID != 0xb06e ||
+			strings.TrimSpace(device.Serial) != strings.TrimSpace(dock.Serial) ||
+			!strings.Contains(strings.ToLower(device.Product+" "+device.Name), "wd19") {
+			continue
+		}
+		targetRoot = physicalUSBRoot(device, byLocation)
+		break
+	}
+	if targetRoot == "" {
+		return domain.USBDevice{}, false
+	}
+
+	var candidate domain.USBDevice
+	matches := 0
+	for _, device := range dock.Devices {
+		if device.VendorID != 0x413c || device.ProductID != 0xb06f ||
+			strings.TrimSpace(device.DescriptorVersion) == "" ||
+			physicalUSBRoot(device, byLocation) != targetRoot {
+			continue
+		}
+		candidate = device
+		matches++
+	}
+	if matches != 1 {
+		return domain.USBDevice{}, false
+	}
+	return candidate, true
+}
+
+func physicalUSBRoot(device domain.USBDevice, byLocation map[string]domain.USBDevice) string {
+	current := device
+	root := ""
+	visited := make(map[string]bool)
+	for {
+		if current.Location != "" {
+			if visited[current.Location] {
+				return ""
+			}
+			visited[current.Location] = true
+			root = current.Location
+		}
+		if current.ParentLocation == "" {
+			return root
+		}
+		next, ok := byLocation[current.ParentLocation]
+		if !ok {
+			return ""
+		}
+		current = next
+	}
 }
