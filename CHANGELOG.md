@@ -16,6 +16,7 @@ All notable changes to `dockwarden` are recorded here.
   serial, while keeping firmware apply fail-closed.
 - Pin the managed fwupdtool runtime to the tested Darwin USB topology
   diagnostics commit.
+- Verify the managed runtime against the new Darwin enumeration commit.
 - Enumerate macOS USB HID endpoints through IOKit when libusb returns no
   devices, and bind each writable HID session to its serial and LocationID.
 - Report a stale macOS HID permission when native discovery sees a dock but
