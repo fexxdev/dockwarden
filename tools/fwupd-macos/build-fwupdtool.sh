@@ -2,7 +2,7 @@
 set -eu
 
 fwupd_version="2.2.1"
-fwupd_commit="74fcfabec244dc073aeb36669c5118fdfcd5107b"
+fwupd_commit="668d7955b538d44f399e148d14afa591df519658"
 fwupd_ref="fexxdev/darwin-hid-dell-dock"
 fwupd_repo="https://github.com/fexxdev/fwupd.git"
 jinja2_version="3.1.6"

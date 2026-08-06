@@ -14,6 +14,8 @@ All notable changes to `dockwarden` are recorded here.
   read-only preflight.
 - Report the physical Gen1 USB endpoint when fwupd cannot expose its HID
   serial, while keeping firmware apply fail-closed.
+- Pin the managed fwupdtool runtime to the tested Darwin USB topology
+  diagnostics commit.
 
 ## [0.3.0] - 2026-08-05
 
