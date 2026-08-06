@@ -2,7 +2,7 @@
 
 This directory builds the standalone Dell Dock tool from the fwupd Darwin
 branch `fexxdev/darwin-hid-dell-dock` at commit
-`028b9c5800d2351a98ceaed4410ab9224c2142ed`.
+`46ddfaf9a9cbbe025976bc71f86f888269d7d95c`.
 The commit reports fwupd version 2.2.1 and contains the Darwin HID transport.
 Dockwarden does not carry a second HID transport or Dell protocol writer.
 It avoids a persistent input callback on Dell docks. This prevents macOS
