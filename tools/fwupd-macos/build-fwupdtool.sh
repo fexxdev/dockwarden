@@ -2,7 +2,7 @@
 set -eu
 
 fwupd_version="2.2.1"
-fwupd_commit="668d7955b538d44f399e148d14afa591df519658"
+fwupd_commit="028b9c5800d2351a98ceaed4410ab9224c2142ed"
 fwupd_ref="fexxdev/darwin-hid-dell-dock"
 fwupd_repo="https://github.com/fexxdev/fwupd.git"
 jinja2_version="3.1.6"
@@ -190,6 +190,9 @@ fi
 # C test names contain no spaces. Intentional field splitting passes each name.
 # shellcheck disable=SC2086
 meson test -C "$build_dir" --no-rebuild fwupd-rust $test_names
+# The Darwin USB backend test has a synthetic HID case and skips physical
+# enumeration in self-test mode, so keep it in the build verification.
+FWUPD_SELF_TEST=1 meson test -C "$build_dir" --no-rebuild fu-usb-backend-test
 DESTDIR="$stage_root" meson install -C "$build_dir"
 
 staged_prefix="$stage_root$prefix"

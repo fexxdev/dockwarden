@@ -2,14 +2,15 @@
 
 This directory builds the standalone Dell Dock tool from the fwupd Darwin
 branch `fexxdev/darwin-hid-dell-dock` at commit
-`668d7955b538d44f399e148d14afa591df519658`.
+`028b9c5800d2351a98ceaed4410ab9224c2142ed`.
 The commit reports fwupd version 2.2.1 and contains the Darwin HID transport.
 Dockwarden does not carry a second HID transport or Dell protocol writer.
 It avoids a persistent input callback on Dell docks. This prevents macOS
 `kIOReturnBusy` errors on output reports.
-The transport converts the libusb USB port path to an exact macOS `LocationID`
-for diagnostics. A serial-less HID endpoint is still rejected by the writer;
-`LocationID` evidence cannot authorize a firmware write.
+When libusb reports no devices on macOS, fwupd enumerates USB HID endpoints
+through IOKit and records their VID, PID, serial, and exact `LocationID`.
+A serial-less HID endpoint is still rejected by the writer; `LocationID`
+evidence cannot authorize a firmware write.
 
 The build needs Apple Silicon Homebrew and these packages:
 
@@ -40,9 +41,8 @@ the network.
 The script creates a fresh source tree from the pinned branch and checks the
 resolved commit. It uses Jinja2 3.1.6 in a fresh virtual environment. It then
 builds fwupdtool and runs the enabled upstream non-hardware test suite. It
-excludes two macOS fixture tests. `fu-usb-backend-test` expects an empty USB
-bus and fails when the Mac has attached USB devices. `fu-engine-test` expects
-Linux CAB content-type detection; macOS reports the CAB fixture as
+excludes the macOS engine fixture test. `fu-engine-test` expects Linux CAB
+content-type detection; macOS reports the CAB fixture as
 `dyn.age80g2pc`. The script does not update firmware or access a dock.
 
 The installed prefix contains fwupd's Dell quirks and plugin data.
