@@ -392,7 +392,7 @@ func physicalUSBRoot(device domain.USBDevice, byLocation map[string]domain.USBDe
 			visited[current.Location] = true
 			root = current.Location
 		}
-		if current.ParentLocation == "" {
+		if current.ParentLocation == "" || current.ParentLocation == "00000000" {
 			return root
 		}
 		next, ok := byLocation[current.ParentLocation]
